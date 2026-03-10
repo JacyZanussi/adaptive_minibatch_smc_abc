@@ -34,7 +34,7 @@ class smc_abc_iterator:
     Sequential Monte Carlo ABC iterator for simulation-based inference.
     """
 
-    def __init__(self,data,model,stats_func,prior,dist_func=None,num_particles=1000,alpha=0.5,ess_prop = 0.5, seed = None,
+    def __init__(self,data,model,stats_func,prior,dist_func='mahalanobis',num_particles=1000,alpha=0.5,ess_prop = 0.5, seed = None,
                 sample_size = np.inf,batch_size=np.inf,batch_size_min=1,batch_size_max=np.inf,sample_with_replacement=True, print_output = True,
                 cores=-1,parallel_batch_size='auto',backend='loky', rcond = 1e-15, epsilon = 1e-6, low_mem = False):
         self.data = data
