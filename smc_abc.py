@@ -34,8 +34,8 @@ class smc_abc_iterator:
     Sequential Monte Carlo ABC iterator for simulation-based inference.
     """
 
-    def __init__(self,data,model,stats_func,prior,dist_func=None,num_particles=1000,alpha=0.5,ess_prop = 0.5, seed = None,
-                sample_size = np.inf,batch_size=np.inf,batch_size_min=1,batch_size_max=np.inf,sample_with_replacement=True, print_output = True,
+    def __init__(self,data,model,stats_func,prior,dist_func='mahalanobis',num_particles=1000,alpha=0.5,ess_prop = 0.5, seed = None,
+                sample_size = np.inf,batch_size=np.inf,batch_size_min=1,batch_size_max=np.inf,sample_with_replacement=True, print_output = True,print_init = True,
                 cores=-1,parallel_batch_size='auto',backend='loky', rcond = 1e-15, epsilon = 1e-6, low_mem = False):
         self.data = data
         self.model = model
@@ -118,6 +118,9 @@ class smc_abc_iterator:
         vol = np.prod(prior[1][:,1] - prior[1][:,0])
         self.log_hdpr_product = vol #Set to the volume of the prior bounds. The posterior log HDPR can't be larger than that.
         self.dtype = np.float32 if low_mem else np.float64
+        #Print initialization details
+        if print_init:
+            self.print_details()
 
 
 
@@ -177,7 +180,7 @@ class smc_abc_iterator:
         
         self.accepted_particles = thetas
         self.accepted_stats = stats
-        #self.accepted_stats_ref = stats_ref
+        #self.accepted_stats_ref = stats_re
         self.accepted_dists = dists
         self.batch_indices = batch_matrix
         self.num_sims = num_sims
