@@ -1,25 +1,5 @@
-# -*- coding: utf-8 -*-
 """
-Created on Sat Oct 26 13:56:24 2024
-
-Snapshot class
-
-@author: Jacy
-
-This is a class for generating snapshot data.
-It should be able to do the following:
-    generate an array of arrays of position
-    Be able to randomize several arguments:
-        cell shape/geometry
-        start site
-        parameters 
-
-
-Right now I'm not sure what properties I want the class to have. 
-Maybe demographic type.
-I was thinking about making a geometry class/superclass or "shape"
-
-
+Class for generating stochastic transcriptional dynamics
 """
 
 import numpy as np
@@ -29,9 +9,6 @@ import numpy as np
 class snapshot_simulator:
     
     def __init__(self):
-        pass
-    
-    def __str__(self):
         pass
     
     #Next: include other models
