@@ -34,7 +34,7 @@ class smc_abc_iterator:
     Sequential Monte Carlo ABC iterator for simulation-based inference.
     """
 
-    def __init__(self,data,model,stats_func,prior,dist_func='mahalanobis',num_particles=1000,alpha=0.5,ess_prop = 0.5, seed = None,
+    def __init__(self,data,model,stats_func,prior,dist_func='mahalanobis',mweight_mat = None,num_particles=1000,alpha=0.5,ess_prop = 0.5, seed = None,
                 sample_size = np.inf,batch_size=np.inf,batch_size_min=1,batch_size_max=np.inf,sample_with_replacement=True, print_output = True,
                 cores=-1,parallel_batch_size='auto',backend='loky', rcond = 1e-15, epsilon = 1e-6, low_mem = False):
         self.data = data
@@ -49,7 +49,7 @@ class smc_abc_iterator:
         if sample_size < np.inf:
             self.sample_size = sample_size
         else:
-            self.sample_size = data.shape[0] if type(data) == np.ndarray else len(data)
+            self.sample_size = int(data.shape[0]) if type(data) == np.ndarray else len(data)
         self.batch_size_min = batch_size_min
         self.batch_size_max = batch_size_max 
         self.batch_size = batch_size
@@ -60,25 +60,34 @@ class smc_abc_iterator:
         if dist_func is None:
             self.dist_func = self.weighted_dist
         elif dist_func == 'mahalanobis':
-            _,stats_obs = stats_func(data,data)
-            #Take per-sample summary statistics of shape (sample_size,N_s), compute covariance.
-            if stats_obs.ndim > 1:
-                stds = np.std(stats_obs, axis = 0, ddof=1)
-                stds[stds == 0] = 1.0
-                stats_scaled = stats_obs / stds
-                shrunk_corr,_ = ledoit_wolf(stats_scaled)
-                cov = np.outer(stds, stds) * shrunk_corr
+            if mweight_mat is None:
+                # Minor safety net for larger datasets
+                _,stats_obs = stats_func(data,data)
+                num_stats = stats_obs.shape[1]
+                size = np.minimum(self.sample_size, 50*num_stats)
+                batch = np.random.choice(self.sample_size,size)
+                data_batched = data[batch] if type(data) == np.ndarray else len(data)
+                _,stats_obs = stats_func(data_batched,data_batched)
+                #Take per-sample summary statistics of shape (sample_size,N_s), compute covariance.
+                if stats_obs.ndim > 1:
+                    stds = np.std(stats_obs, axis = 0, ddof=1)
+                    stds[stds == 0] = 1.0
+                    stats_scaled = stats_obs / stds
+                    shrunk_corr,_ = ledoit_wolf(stats_scaled)
+                    cov = np.outer(stds, stds) * shrunk_corr
+                else:
+                    return
+                self.mahalanobis_cov = cov
+                W_inv = np.linalg.pinv(cov,rcond = self.rcond)
+                self.W_inv = W_inv
             else:
-                return
-            self.mahalanobis_cov = cov
-            W = np.linalg.pinv(cov,rcond = self.rcond)
-            self.W = W
+                self.W_inv = mweight_mat
             def mahalanobis(x,y,thr):
                 x_ = np.mean(x,axis=0) if x.ndim > 1 else x
                 y_ = np.mean(y,axis=0) if y.ndim > 1 else y
                 diff = x_ - y_
                 assert diff.ndim == 1
-                dist_sq = diff.T @ self.W @ diff 
+                dist_sq = diff.T @ self.W_inv @ diff 
                 dist = np.sqrt(dist_sq)
                 return dist, (dist < thr)
             self.dist_func = mahalanobis

@@ -1,6 +1,7 @@
 ### Auxiliary functions for smc abc
 import numpy as np
-
+import timeit
+from matplotlib import pyplot as plt
 
 ### Uniform prior triple generator
 ## Prior
@@ -61,3 +62,34 @@ def continue_func_multiple(criteria : tuple):
     ## criteria must be a list of tuples like (attribute, comparison, threshold)
     return
 
+
+
+### Function for visualizing and estimating time increase per sample
+# Benchmark Parameters
+def benchmark_time(batch_sizes, simulator):
+    #batch_sizes = [10, 100, 1000, 5000, 10000, 50000, 100000]
+    results = []
+
+    print("Running benchmarks...")
+    for n in batch_sizes:
+        # Use lambda to pass your parameters to the simulator
+        # repeat=3 runs the test 3 times, number=10 runs the function 10 times per test
+        t = timeit.repeat(lambda: simulator(n), 
+                        repeat=3, number=10)
+        
+        # Standard practice: take the best of the repetitions
+        avg_time_per_call = min(t) / 10
+        results.append(avg_time_per_call)
+        print(f"Batch {n}: {avg_time_per_call:.6f} sec")
+    print(f"Average increase in seconds per sample: {np.mean(np.diff(results)/np.diff(batch_sizes))}")
+
+
+    # Simple Plot
+    plt.figure(figsize=(6, 4))
+    plt.plot(batch_sizes, results, marker='o', linestyle='-', color='b')
+    plt.title("GMM Simulator Performance")
+    plt.xlabel("Batch Size ($N$)")
+    plt.ylabel("Time per call (seconds)")
+    plt.grid(True)
+    plt.tight_layout()
+    plt.show()
