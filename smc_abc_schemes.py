@@ -99,13 +99,25 @@ def fvc_loop(est,ess_resample=True,ess_prop = 0.5):
 
 ## Full Variance Control of replicates
 ## Assumes the third argument is the number of replicates
-def fvc_init(args,p=[3,0.1,0.1]):
+def fvc_rep_init(args,p=[3,0.1,0.1], asymptotic = False):
+    '''
+    Variance-control adaptive minibatch SMC ABC applied to adapting replicates. For stochastic simulators only. 
+    
+    Parameters
+    ----------
+    args : dictionary
+        A dictionary of inputs to the SMC ABC class. Requires data, model, stats function, and prior at least.
+    p : list
+        Hyper parameters for the method: [initial minibatch size, c, lambda]
+    asymptotic : Bool
+        If False, uses the finite sample size formula for adapting replicates. 
+    '''
     est = constant_init(args)
     est.batch_size = p[0]
     est.c = p[1]
     est.lambda_ = p[2] #since "lambda" is a special word, add an undercore
     l = p[2]
-    N = est.sample_size
+    N = est.sample_size if N is None else N
     W_inv = est.W_inv
     est.esv = lambda S: np.linalg.trace(W_inv @ S)
     def update_mbs():
@@ -127,7 +139,10 @@ def fvc_init(args,p=[3,0.1,0.1]):
             new_hyperparams = [est.batch_size,est.c,est.lambda_]
             print(f"Automatic c selection: c = {est.c}")
             print(f"New hyperparameter set: {new_hyperparams}")
-        num_reps = est.v_total * N / (N*(est.c*est.alpha_threshold)**2 + est.v_total)
+        if asymptotic:
+            num_reps = est.v_total / (est.batch_size * est.c**2 * est.alpha_threshold**2)
+        else:
+            num_reps = est.v_total * N / (N*(est.c*est.alpha_threshold)**2 + est.v_total)
         est.num_reps = num_reps
         est.model = lambda p,Bi : est.model(p,Bi,num_reps)
         #est.batch_size = est.v_total * N / (N*(est.c*est.alpha_threshold)**2 + est.v_total)
