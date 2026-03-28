@@ -117,9 +117,11 @@ def fvc_rep_init(args,p=[3,0.1,0.1], asymptotic = False):
     est.c = p[1]
     est.lambda_ = p[2] #since "lambda" is a special word, add an undercore
     l = p[2]
-    N = est.sample_size if N is None else N
+    est.reps = 1
+    N = est.sample_size
     W_inv = est.W_inv
     est.esv = lambda S: np.linalg.trace(W_inv @ S)
+    est.base_model = est.model #necessary for handling recussion
     def update_mbs():
         delta = est.posterior_stats - est.posterior_stats_ref
         if delta.ndim <= 2:
@@ -135,17 +137,92 @@ def fvc_rep_init(args,p=[3,0.1,0.1], asymptotic = False):
 
         #automatic c selection
         if est.c is None:
-            est.c = np.sqrt((est.v_total*(N - est.batch_size))/(est.batch_size*N*est.alpha_threshold**2))
+            if asymptotic:
+                est.c = np.sqrt(est.v_total/(est.reps * est.batch_size * est.alpha_threshold**2))
+            else:
+                est.c = np.sqrt((est.v_total*(N - est.reps*est.batch_size))/(est.reps*est.batch_size*N*est.alpha_threshold**2))
             new_hyperparams = [est.batch_size,est.c,est.lambda_]
             print(f"Automatic c selection: c = {est.c}")
             print(f"New hyperparameter set: {new_hyperparams}")
         if asymptotic:
-            num_reps = est.v_total / (est.batch_size * est.c**2 * est.alpha_threshold**2)
+            num_reps = int(est.v_total / (est.batch_size * est.c**2 * est.alpha_threshold**2))
         else:
-            num_reps = est.v_total * N / (N*(est.c*est.alpha_threshold)**2 + est.v_total)
-        est.num_reps = num_reps
-        est.model = lambda p,Bi : est.model(p,Bi,num_reps)
+            num_reps = int(est.v_total * N / (N*(est.c*est.alpha_threshold)**2 + est.v_total))
+        est.reps = np.maximum(num_reps,1)
+        num_reps = est.reps
+        est.model = lambda p,Bi : est.base_model(p,Bi,num_reps)
         #est.batch_size = est.v_total * N / (N*(est.c*est.alpha_threshold)**2 + est.v_total)
         print(f"Variance estimate: {2*est.v_total/N + (est.c*est.alpha_threshold)**2}. C estimate: {est.c_est}. V_total: {est.v_total}. batch size: {est.batch_size}. reps: {num_reps}")
+    est.update_mbs = update_mbs
+    return est
+
+
+## A mix of both where we update the vector [n,k].
+def fvc_kn_init(args,p=[2,None,1.0,0.5], asymptotic = False):
+    '''
+    Variance-control adaptive minibatch SMC ABC applied to adapting replicates. For stochastic simulators only. 
+    
+    Parameters
+    ----------
+    args : dictionary
+        A dictionary of inputs to the SMC ABC class. Requires data, model, stats function, and prior at least.
+    p : list
+        Hyper parameters for the method: [initial minibatch size, c, lambda, alpha]
+    asymptotic : Bool
+        If False, uses the finite sample size formula for adapting replicates. 
+    '''
+    est = constant_init(args)
+    est.batch_size = p[0]
+    est.c = p[1]
+    est.lambda_ = p[2] #since "lambda" is a special word, add an undercore
+    l = p[2]
+    alpha = p[3]
+    est.reps = 1
+    N = est.sample_size
+    W_inv = est.W_inv
+    est.esv = lambda S: np.linalg.trace(W_inv @ S)
+    est.base_model = est.model #necessary for handling recussion
+    def update_mbs():
+        delta = est.posterior_stats - est.posterior_stats_ref
+        if delta.ndim <= 2: #This part shouldn't apply anymore.... Remove it....
+            Sigma = np.cov(delta.T)
+        else: #The dimensions are (N particles by N_bs batch size by N_s stats)
+            #The idea here is to calculate ESV within replicates, Average over replicates, then continue the computation. 
+            #We would obtain within-replicate variance and within-batch variance. 
+            #Assuming we have successive batches in replicates, we would have
+            cov_list = np.array([np.cov(x.T) for x in delta]) #(N by N_s by N_s)
+            Sigma = np.mean(cov_list,axis = 0) #(N_s,N_s)
+        est.Sigma = Sigma
+        v_total = est.esv(Sigma)
+        # Exponential Moving Average update v_total
+        est.v_total = (1-l) * est.v_total + l * v_total if est.generation > 1 else v_total
+        est.c_est = np.sqrt((est.v_total*(N - est.batch_size))/(est.batch_size*N*est.current_alpha_threshold**2))
+
+        #automatic c selection
+        if est.c is None:
+            if asymptotic:
+                est.c = np.sqrt(est.v_total/(est.reps * est.batch_size * est.alpha_threshold**2))
+            else:
+                est.c = np.sqrt((est.v_total*(N - est.reps*est.batch_size))/(est.reps*est.batch_size*N*est.alpha_threshold**2))
+            new_hyperparams = [est.batch_size,est.c,est.lambda_]
+        print(f"Automatic c selection: c = {est.c}")
+        print(f"New hyperparameter set: {new_hyperparams}")
+        if asymptotic:
+            Factor = est.v_total / (est.c**2 * est.alpha_threshold**2)
+        else:
+            Factor = est.v_total * N / (N * (est.c**2 * est.alpha_threshold**2) + est.v_total)
+        # Note: The dynamics below follow hyperbolic dynamics closely and is orbit 2, meaning that it would oscillate for constant F outside of equilibrium. 
+        # To handle this, we introduce memory term alpha.
+        # num_reps = (est.reps*(1-alpha) + alpha*Factor / est.batch_size)
+        # batch_size = (est.batch_size*(1-alpha) + alpha*Factor / est.reps)
+
+        num_reps = np.sqrt(Factor/alpha)
+        batch_size = np.sqrt(Factor*alpha)
+
+        est.batch_size = batch_size
+        est.reps = int(np.maximum(num_reps,1))
+        num_reps = est.reps
+        est.model = lambda p,Bi : est.base_model(p,Bi,num_reps)
+        print(f"V_total: {est.v_total:.3e}. Variance estimate: {est.v_total/N + (est.c*est.alpha_threshold)**2:.3e}. Within-batch variance+: . Within-replicate variance. Estimated K .C estimate: {est.c_est:.3e}. batch size: {est.batch_size}. reps: {num_reps}")
     est.update_mbs = update_mbs
     return est
