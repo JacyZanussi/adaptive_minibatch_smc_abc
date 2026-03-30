@@ -57,19 +57,10 @@ def stop(est,attribute_name,threshold = 0.025,compare = lambda x,y : x < y):
     else:
         return True
 
-## Wrapper for continue_func
-def continue_func_multiple(criteria : tuple):
-    ## criteria must be a list of tuples like (attribute, comparison, threshold)
-    return
-
-
-
 ### Function for visualizing and estimating time increase per sample
 # Benchmark Parameters
 def benchmark_time(batch_sizes, simulator):
-    #batch_sizes = [10, 100, 1000, 5000, 10000, 50000, 100000]
     results = []
-
     print("Running benchmarks...")
     for n in batch_sizes:
         # Use lambda to pass your parameters to the simulator
@@ -87,7 +78,7 @@ def benchmark_time(batch_sizes, simulator):
     # Simple Plot
     plt.figure(figsize=(6, 4))
     plt.plot(batch_sizes, results, marker='o', linestyle='-', color='b')
-    plt.title("GMM Simulator Performance")
+    plt.title("Simulator Performance")
     plt.xlabel("Batch Size ($N$)")
     plt.ylabel("Time per call (seconds)")
     plt.grid(True)

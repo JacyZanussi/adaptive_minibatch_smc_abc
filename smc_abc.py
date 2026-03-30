@@ -35,7 +35,7 @@ class smc_abc_iterator:
     """
 
     def __init__(self,data,model,stats_func,prior,dist_func='mahalanobis',mweight_mat = None,num_particles=1000,alpha=0.5,ess_prop = 0.5, seed = None,
-                sample_size = np.inf,batch_size=np.inf,batch_size_min=1,batch_size_max=np.inf,sample_with_replacement=True, print_output = True,
+                sample_size = np.inf,batch_size=np.inf,batch_size_min=1,batch_size_max=np.inf,num_reps=1,sample_with_replacement=True, print_output = True,
                 cores=-1,parallel_batch_size='auto',backend='loky', rcond = 1e-15, epsilon = 1e-6, low_mem = False):
         self.data = data
         self.model = model
@@ -53,6 +53,7 @@ class smc_abc_iterator:
         self.batch_size_min = batch_size_min
         self.batch_size_max = batch_size_max 
         self.batch_size = batch_size
+        self.reps = num_reps
         self.sample_with_replacement = sample_with_replacement
 
         ## Distance function initialization
@@ -332,7 +333,7 @@ class smc_abc_iterator:
         dist = np.linalg.norm((x-y)*sigma,ord=ord)
         return dist, (dist < threshold)
     
-    # Batch Size
+    # Batch Size - this propoerty stores a float to reduce rounding error for recursive updates.
     @property
     def batch_size(self):
         return self.__batch_size__
@@ -340,6 +341,9 @@ class smc_abc_iterator:
     def batch_size(self,value):
         self.__batch_size__ = np.maximum(np.minimum(value,self.batch_size_max),self.batch_size_min)
         self.__batch_size_round__ = round(self.__batch_size__)
+    @batch_size.getter
+    def batch_size(self):
+        return self.__batch_size_round__
     #minimum batch size
     @property
     def batch_size_min(self):
@@ -363,7 +367,17 @@ class smc_abc_iterator:
             stats_ref[i] = self.stats_func(obs_subset,obs_subset)[1]
         del posterior_batch_indices
         return stats_ref
-
+    #repeats - This property stores a float to reduce rounding error for recursive updates.
+    @property
+    def reps(self):
+        return self.__reps__
+    @reps.setter
+    def reps(self,value):
+        self.__reps__ = np.maximum(value,1)
+        self.__reps_round__ = round(np.round(self.__reps__))
+    @reps.getter
+    def reps(self):
+        return self.__reps_round__
     
 
     ###### Additional Functions: Post-estimation, Prangle's adaptive distances, plotting, wrappers, etc
