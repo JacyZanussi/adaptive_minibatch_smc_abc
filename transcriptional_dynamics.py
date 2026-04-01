@@ -197,7 +197,7 @@ def spatial_dynamics(Tbirth_sd, Nbirths_sd, class_index_sd,
 # ---------------------------------------------------------------------------
 
 @njit
-def simulate_njit(kplus, kminus, rburst, D, T, dt, z, lengths):
+def simulate(kplus, kminus, rburst, D, T, dt, z, lengths):
     """Full spatial + population simulation."""
     Tbirth_sd, Nbirths_sd, class_index_sd = population_dynamics(
         z, kplus, kminus, rburst, T
@@ -208,46 +208,7 @@ def simulate_njit(kplus, kminus, rburst, D, T, dt, z, lengths):
 
 
 @njit
-def simulate_nospace_njit(kplus, kminus, rburst, T, z):
+def simulate_nospace(kplus, kminus, rburst, T, z):
     """Population-only simulation (no diffusion). Returns per-snapshot counts."""
     _, counts, _ = population_dynamics(z, kplus, kminus, rburst, T)
     return counts
-
-
-# ---------------------------------------------------------------------------
-# Example usage
-# ---------------------------------------------------------------------------
-
-# if __name__ == "__main__":
-
-rng = np.random.default_rng(42)
-
-sample_size = 300
-kplus       = 30.0
-kminus      = 10.0
-rburst      = 10.0
-diffusivity = 0.1
-T, dt       = 5.0, 0.01
-
-bp, gp  = 2, 4
-lengths = rng.gamma(shape=gp, scale=1.0 / gp, size=sample_size)
-sites   = rng.beta(a=bp, b=bp, size=sample_size) * lengths
-
-# Cast to float64 — njit is strict about dtypes
-lengths = lengths.astype(np.float64)
-sites   = sites.astype(np.float64)
-
-print("Warming up JIT (first call compiles)…")
-data_list = simulate_njit(
-    kplus, kminus, rburst, diffusivity, T, dt, sites, lengths
-)
-
-# Convert typed List → object array of numpy arrays (same as before)
-data = np.empty(sample_size, dtype=object)
-for i in range(sample_size):
-    data[i] = np.asarray(data_list[i])
-
-counts = np.array([len(d) for d in data])
-print(f"Mean mRNA count : {counts.mean():.2f}")
-print(f"Fraction zero   : {(counts == 0).mean():.2f}")
-print("Done.")

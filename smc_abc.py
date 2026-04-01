@@ -128,7 +128,8 @@ class smc_abc_iterator:
         vol = np.prod(prior[1][:,1] - prior[1][:,0])
         self.log_hdpr_product = vol #Set to the volume of the prior bounds. The posterior log HDPR can't be larger than that.
         self.dtype = np.float32 if low_mem else np.float64
-
+        # warm up njit
+        self.stats_func(*self.model(prior[0](),np.arange(self.sample_size)))
 
 
     ###### Step 1: Generation Step - Samples from the proposal distribution, simulates, and accepts particles. Updates internal data to reflect this.

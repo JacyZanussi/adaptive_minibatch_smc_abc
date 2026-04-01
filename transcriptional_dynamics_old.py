@@ -3,7 +3,7 @@ Class for generating stochastic transcriptional dynamics
 """
 
 import numpy as np
-from numba import jit
+from numba import njit
 
 
 #Right now, this is just a bundle of functions
