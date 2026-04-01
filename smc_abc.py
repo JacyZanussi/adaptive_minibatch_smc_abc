@@ -34,8 +34,8 @@ class smc_abc_iterator:
     Sequential Monte Carlo ABC iterator for simulation-based inference.
     """
 
-    def __init__(self,data,model,stats_func,prior,dist_func='mahalanobis',num_particles=1000,alpha=0.5,ess_prop = 0.5, seed = None,
-                sample_size = np.inf,batch_size=np.inf,batch_size_min=1,batch_size_max=np.inf,sample_with_replacement=True, print_output = True,print_init = True,
+    def __init__(self,data,model,stats_func,prior,dist_func='mahalanobis',mweight_mat = None,num_particles=1000,alpha=0.5,ess_prop = 0.5, seed = None,
+                sample_size = np.inf,batch_size=np.inf,batch_size_min=1,batch_size_max=np.inf,num_reps=1,sample_with_replacement=True, print_output = True,
                 cores=-1,parallel_batch_size='auto',backend='loky', rcond = 1e-15, epsilon = 1e-6, low_mem = False):
         self.data = data
         self.model = model
@@ -49,10 +49,11 @@ class smc_abc_iterator:
         if sample_size < np.inf:
             self.sample_size = sample_size
         else:
-            self.sample_size = data.shape[0] if type(data) == np.ndarray else len(data)
+            self.sample_size = int(data.shape[0]) if type(data) == np.ndarray else len(data)
         self.batch_size_min = batch_size_min
         self.batch_size_max = batch_size_max 
         self.batch_size = batch_size
+        self.reps = num_reps
         self.sample_with_replacement = sample_with_replacement
 
         ## Distance function initialization
@@ -60,25 +61,34 @@ class smc_abc_iterator:
         if dist_func is None:
             self.dist_func = self.weighted_dist
         elif dist_func == 'mahalanobis':
-            _,stats_obs = stats_func(data,data)
-            #Take per-sample summary statistics of shape (sample_size,N_s), compute covariance.
-            if stats_obs.ndim > 1:
-                stds = np.std(stats_obs, axis = 0, ddof=1)
-                stds[stds == 0] = 1.0
-                stats_scaled = stats_obs / stds
-                shrunk_corr,_ = ledoit_wolf(stats_scaled)
-                cov = np.outer(stds, stds) * shrunk_corr
+            if mweight_mat is None:
+                # Minor safety net for larger datasets
+                _,stats_obs = stats_func(data,data)
+                num_stats = stats_obs.shape[1]
+                size = np.minimum(self.sample_size, 50*num_stats)
+                batch = np.random.choice(self.sample_size,size)
+                data_batched = data[batch] if type(data) == np.ndarray else len(data)
+                _,stats_obs = stats_func(data_batched,data_batched)
+                #Take per-sample summary statistics of shape (sample_size,N_s), compute covariance.
+                if stats_obs.ndim > 1:
+                    stds = np.std(stats_obs, axis = 0, ddof=1)
+                    stds[stds == 0] = 1.0
+                    stats_scaled = stats_obs / stds
+                    shrunk_corr,_ = ledoit_wolf(stats_scaled)
+                    cov = np.outer(stds, stds) * shrunk_corr
+                else:
+                    return
+                self.mahalanobis_cov = cov
+                W_inv = np.linalg.pinv(cov,rcond = self.rcond)
+                self.W_inv = W_inv
             else:
-                return
-            self.mahalanobis_cov = cov
-            W = np.linalg.pinv(cov,rcond = self.rcond)
-            self.W = W
+                self.W_inv = mweight_mat
             def mahalanobis(x,y,thr):
                 x_ = np.mean(x,axis=0) if x.ndim > 1 else x
                 y_ = np.mean(y,axis=0) if y.ndim > 1 else y
                 diff = x_ - y_
                 assert diff.ndim == 1
-                dist_sq = diff.T @ self.W @ diff 
+                dist_sq = diff.T @ self.W_inv @ diff 
                 dist = np.sqrt(dist_sq)
                 return dist, (dist < thr)
             self.dist_func = mahalanobis
@@ -118,10 +128,8 @@ class smc_abc_iterator:
         vol = np.prod(prior[1][:,1] - prior[1][:,0])
         self.log_hdpr_product = vol #Set to the volume of the prior bounds. The posterior log HDPR can't be larger than that.
         self.dtype = np.float32 if low_mem else np.float64
-        #Print initialization details
-        if print_init:
-            self.print_details()
-
+        # warm up njit
+        self.stats_func(*self.model(prior[0](),np.arange(self.sample_size)))
 
 
     ###### Step 1: Generation Step - Samples from the proposal distribution, simulates, and accepts particles. Updates internal data to reflect this.
@@ -144,7 +152,7 @@ class smc_abc_iterator:
 
         parloop_partial = partial(
             parloop,
-            batch_size = self.batch_size,
+            batch_size = self.__batch_size_round__,
             sample_size = self.sample_size,
             generation = self.generation,
             sample_func = self.sample_func,
@@ -157,15 +165,15 @@ class smc_abc_iterator:
             resample_batch_size = self.accepted_per_generation 
         )
 
-        rind = np.random.choice(self.sample_size,self.batch_size)
+        rind = np.random.choice(self.sample_size,self.__batch_size_round__)
         s,_ = self.stats_func(self.data[rind],self.data[rind])
         self.stats_shape = s.shape
 
         thetas = np.empty((self.accepted_per_generation,self.num_params))
-        stats = np.empty((self.accepted_per_generation,*self.stats_shape),dtype=self.dtype)
-        #stats_ref = np.empty((self.accepted_per_generation,*self.stats_shape),dtype=self.dtype)
+        #stats = np.empty((self.accepted_per_generation,*self.stats_shape),dtype=self.dtype)
+        stats = []
         dists = np.empty(self.accepted_per_generation,dtype=self.dtype)
-        batch_matrix = np.empty((self.accepted_per_generation,self.batch_size),dtype=int)
+        batch_matrix = np.empty((self.accepted_per_generation,self.__batch_size_round__),dtype=int)
         num_sims = 0
         del s, rind
         for p,params,sim_stats, dist, bi, ns in Parallel(n_jobs=self.cores,prefer='processes', temp_folder=None,
@@ -173,14 +181,14 @@ class smc_abc_iterator:
             delayed(parloop_partial)(p,seed = child_seeds[p]) for p in range(self.accepted_per_generation)
             ):
             thetas[p] = params
-            stats[p]  = sim_stats
+            #stats[p]  = sim_stats
+            stats.append(sim_stats)
             dists[p]  = dist
             batch_matrix[p] = bi
             num_sims += ns
-        
+        stats = np.array(stats)
         self.accepted_particles = thetas
         self.accepted_stats = stats
-        #self.accepted_stats_ref = stats_re
         self.accepted_dists = dists
         self.batch_indices = batch_matrix
         self.num_sims = num_sims
@@ -222,7 +230,7 @@ class smc_abc_iterator:
         # if print_output is None:
         #     print_output = self.print_output
         if print_output:
-            print(f"Generation: {self.generation}. Batch Size: {self.batch_size}. Acceptance Rate: {self.acceptance_rate:.3f}. Step time: {self.step_time:.3f}. Total time {self.total_time:.3f}",end=". ")
+            print(f"Generation: {self.generation}. Batch Size: {self.__batch_size_round__}. Acceptance Rate: {self.acceptance_rate:.3f}. Step time: {self.step_time:.3f}. Total time {self.total_time:.3f}",end=". ")
             print(f"post-filter threshold: {self.next_alpha_threshold:.4f}. ESS: {self.ESS:.2f}. Log HDPR vol: {self.log_hdpr_product:.3f}")
 
 
@@ -326,20 +334,24 @@ class smc_abc_iterator:
         dist = np.linalg.norm((x-y)*sigma,ord=ord)
         return dist, (dist < threshold)
     
-    # Batch Size
+    # Batch Size - this propoerty stores a float to reduce rounding error for recursive updates.
     @property
     def batch_size(self):
         return self.__batch_size__
     @batch_size.setter
     def batch_size(self,value):
-        self.__batch_size__ = round(np.maximum(np.minimum(value,self.batch_size_max),self.batch_size_min))
+        self.__batch_size__ = np.maximum(np.minimum(value,self.batch_size_max),self.batch_size_min)
+        self.__batch_size_round__ = round(self.__batch_size__)
+    @batch_size.getter
+    def batch_size(self):
+        return self.__batch_size_round__
     #minimum batch size
     @property
     def batch_size_min(self):
         return self.__batch_size_min__
     @batch_size_min.setter
     def batch_size_min(self,value):
-        self.__batch_size_min__ = int(np.maximum(value,1))
+        self.__batch_size_min__ = int(np.maximum(value,2))
     #maximum batch size 
     @property
     def batch_size_max(self):
@@ -356,7 +368,17 @@ class smc_abc_iterator:
             stats_ref[i] = self.stats_func(obs_subset,obs_subset)[1]
         del posterior_batch_indices
         return stats_ref
-
+    #repeats - This property stores a float to reduce rounding error for recursive updates.
+    @property
+    def reps(self):
+        return self.__reps__
+    @reps.setter
+    def reps(self,value):
+        self.__reps__ = np.maximum(value,1)
+        self.__reps_round__ = round(np.round(self.__reps__))
+    @reps.getter
+    def reps(self):
+        return self.__reps_round__
     
 
     ###### Additional Functions: Post-estimation, Prangle's adaptive distances, plotting, wrappers, etc
