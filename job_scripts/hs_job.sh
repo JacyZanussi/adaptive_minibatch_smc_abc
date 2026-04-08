@@ -8,7 +8,7 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=4
 #SBATCH --time=16:00:00
-#SBATCH --array=0-11
+#SBATCH --array=0-4
 
 satid=$SLURM_ARRAY_TASK_ID
 echo "Heterogeneity Sweep"

@@ -8,25 +8,27 @@ import numpy as np
 def constant_init(init_params,p=[1]):
     est = abc_iter(**init_params)
     est.batch_size = p[0]
-    est.esv = lambda S: np.linalg.trace(est.W_inv @ S)
-    est.v_total_est = np.inf
-    est.init_sigma = est.esv(est.W_inv)
-    def estimate_v_total(est):
-        observed_stats_repeated = np.repeat(est.posterior_stats_ref, repeats = est.reps, axis=1)
-        delta = est.posterior_stats - observed_stats_repeated
-        if delta.ndim <= 2:
-            Sigma = np.cov(delta.T)
-        else: #The dimensions are (N particles by N_bs batch size by N_s stats)
-            cov_list = np.array([np.cov(x.T) for x in delta]) #(N by N_s by N_s)
-            Sigma = np.mean(cov_list,axis=0)
-            delta_reshaped = delta.reshape(est.num_particles, est.batch_size, est.reps, delta.shape[-1])
-            batch_means = np.mean(delta_reshaped, axis=2)
-            batch_centers = batch_means.mean(axis=1, keepdims=True)
-            diff = batch_means - batch_centers
-            Sigma = np.einsum('ijk,ijl->kl', diff, diff)/(est.num_particles * (est.batch_size - 1))
-        est.Sigma = Sigma
-        est.v_total_est = est.esv(Sigma)
-    est.estimate_v_total = estimate_v_total
+    # est.esv = lambda S: np.linalg.trace(est.W_inv @ S)
+    # est.v_total_est = np.inf
+    # est.init_sigma = est.esv(est.W_inv)
+    # def estimate_v_total(est):
+    #     observed_stats_repeated = np.repeat(est.posterior_stats_ref, repeats = est.reps, axis=1)
+    #     delta = est.posterior_stats - observed_stats_repeated
+    #     if delta.ndim <= 2: 
+    #         # NOTE: Critical flaw here. We can't bootstrap covariances of batches here, and this is covariance over particles, not observations.
+    #         #Sigma = np.cov(delta.T)
+    #         pass
+    #     else: #The dimensions are (N particles by N_bs batch size by N_s stats)
+    #         cov_list = np.array([np.cov(x.T) for x in delta]) #(N by N_s by N_s)
+    #         Sigma = np.mean(cov_list,axis=0)
+    #         delta_reshaped = delta.reshape(est.num_particles, est.batch_size, est.reps, delta.shape[-1]) #Handles replicates
+    #         batch_means = np.mean(delta_reshaped, axis=2)
+    #         batch_centers = batch_means.mean(axis=1, keepdims=True)
+    #         diff = batch_means - batch_centers
+    #         Sigma = np.einsum('ijk,ijl->kl', diff, diff)/(est.num_particles * (est.batch_size - 1))
+    #     est.Sigma = Sigma
+    #     est.v_total_est = est.esv(Sigma)
+    # est.estimate_v_total = estimate_v_total
     est.snr = np.inf
     return est
 def constant_loop(est,ess_resample=True,ess_prop = 0.5):
@@ -37,7 +39,7 @@ def constant_loop(est,ess_resample=True,ess_prop = 0.5):
     v = est.v_total_est
     nt = est.batch_size
     N = est.sample_size
-    esq = est.next_alpha_threshold**2
+    esq = est.alpha_threshold**2
     est.c_est_ = np.sqrt((v/esq)*(1/nt - 1/N))
     snr = esq / (v / nt)
     est.snr = snr
@@ -56,22 +58,15 @@ def fvc_init(args,p=[2,None,0.5]):
     est.lambda_ = p[2] #since "lambda" is a special word, add an undercore
     l = p[2]
     N = est.sample_size
-    W_inv = est.W_inv
-    est.esv = lambda S: np.linalg.trace(W_inv @ S)
+    # W_inv = est.W_inv
+    # est.esv = lambda S: np.linalg.trace(W_inv @ S)
     def update_mbs():
-        # observed_stats_repeated = np.repeat(est.posterior_stats_ref, repeats = est.reps, axis=1)
-        # delta = est.posterior_stats - observed_stats_repeated
-        # assert delta.ndim > 2, 'FVC requires statistics calculated per observation in the batches. ensure posterior stats are ndim > 2 with dimensions (N_particles, N_batch, N_stats)'
-        # cov_list = np.array([np.cov(x.T) for x in delta]) #(N by N_s by N_s)
-        # Sigma = np.mean(cov_list,axis = 0) #(N_s,N_s)
-        # est.Sigma = Sigma
-        # v_total = est.esv(Sigma)
-        v_total = est.v_total_est
         # Exponential Moving Average update v_total
+        v_total = est.v_total_est
         est.v_total = (1-l) * est.v_total + l * v_total if est.generation > 1 else v_total
         est.c_est = np.sqrt((est.v_total*(N - est.batch_size))/(est.batch_size*N*est.current_alpha_threshold**2))
   
-        #automatic c selection
+        # Automatic c selection
         if est.c is None:
             est.c = np.sqrt((est.v_total*(N - est.batch_size))/(est.batch_size*N*est.alpha_threshold**2))
             new_hyperparams = [est.batch_size,est.c,est.lambda_]

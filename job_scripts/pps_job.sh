@@ -31,4 +31,4 @@ cd "$BASE_DIR" || { echo "Directory $BASE_DIR not found"; exit 1; }
 # Activate environment
 source "${BASE_DIR}/.venv/bin/activate" 
 
-python -u experiment_hyperparameters.py "$satid"
+python -u experiment_physical_parameters.py "$satid"

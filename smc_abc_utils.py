@@ -2,30 +2,47 @@
 import numpy as np
 import timeit
 from matplotlib import pyplot as plt
+from numba import njit
 
-### Uniform prior triple generator
-## Prior
 def uniform_prior(prior_domain):
-    '''
-    Generates a uniform prior triple for use in the smc abc iterator. 
-
-    prior_domain : np array of shape (N,2) for N parameters to be estimated    
-    '''
-    prior_domain = np.array(prior_domain)
-    lower = prior_domain[:,0]
-    upper = prior_domain[:,1]
+    # Ensure it's a clean, picklable NumPy array
+    prior_domain = np.ascontiguousarray(prior_domain, dtype=np.float64)
+    lower = prior_domain[:, 0]
+    upper = prior_domain[:, 1]
+    
+    # Calculate volume here (standard numpy math is picklable)
     vol = np.prod(upper - lower)
-    def prior_func():
-        return np.random.uniform(prior_domain.T[0],prior_domain.T[1])
-    def density(x):
-        x = np.atleast_2d(x)
-        in_bounds = np.all((x>= lower) & (x <= upper), axis = 1)
-        densities = np.zeros((x.shape[0],1))
-        densities[in_bounds] = 1/vol
-        return densities[:,0]
-    prior = [prior_func,prior_domain,density]
-    return prior
 
+    # These wrappers only reference the arrays, which pickle perfectly
+    def prior_func():
+        return n_sample(lower, upper)
+
+    def density(x):
+        return n_density(x, lower, upper, vol)
+
+    return [prior_func, prior_domain, density]
+
+# Use standard NJIT functions instead of a JitClass instance
+@njit
+def n_sample(l, u):
+    out = np.empty(len(l))
+    for i in range(len(l)):
+        out[i] = np.random.uniform(l[i], u[i])
+    return out
+
+@njit
+def n_density(x, l, u, v):
+    # Handle batching or single
+    x_arr = np.atleast_2d(x)
+    res = np.zeros(len(x_arr))
+    for i in range(len(x_arr)):
+        in_bounds = True
+        for j in range(x_arr.shape[1]):
+            if x_arr[i, j] < l[j] or x_arr[i, j] > u[j]:
+                in_bounds = False
+                break
+        res[i] = 1.0 / v if in_bounds else 0.0
+    return res if x.ndim > 1 else res[0]
 
 
 ### stop function

@@ -47,7 +47,6 @@ batch size
 '''
 
 ## Import smc abc class and schemes
-from smc_abc import smc_abc_iterator as abc_iter
 import smc_abc_schemes as schemes
 import smc_abc_utils as utils
 
@@ -78,6 +77,7 @@ def lotka_volterra_step(
     sample_size = 1024, T = 5, dt = 0.01, #simulation parameters (base)
     alpha = 0.5, num_particles = 500, cores = 4, #estimator parameters
     prior_domain = [[0.0,10.0],[0.0,0.05],[0.0,10.0]],
+    method = 'constant',
     **kwargs
 ):
     a,b,g = list(physical_params)
@@ -85,6 +85,7 @@ def lotka_volterra_step(
 
     ### Data generation or loading:
     if input_filename is None:
+        print(f"Simulating data with parameters: {physical_params} and heterogeneities: {heterogeneities}")
         ## Heterogeneity - uniformly distributed initial conditions centered around 500
         ic_range = heterogeneities[0]
         assert (ic_range >= 1) and (ic_range < 1000)
@@ -92,6 +93,7 @@ def lotka_volterra_step(
         ic = rng.choice(ic_range,(sample_size,2)) + shift
         _,data_temp = lv.tau_leaping(ic,T,a,b,g,d,dt = dt)
     else:
+        print(f"Loading data from: {input_filename}")
         with open(input_filename,'rb') as f:
             lv_dat = pickle.load(f) #third argument is ground truth parameters
             data_temp = lv_dat['data']
@@ -141,9 +143,10 @@ def lotka_volterra_step(
     #Maybe make this a function since it'll be repeated code...
     results_list = []
     est = init(init_params,scheme_params)
+    attr_list = info_dict[method]
     while not stop(est):
         loop(est)
-        results = get_info(est)
+        results = get_info(est,attr_list)
         results_list.append(results)
 
     return results_list
@@ -152,6 +155,10 @@ def lotka_volterra_step(
 @njit
 def batch_corr_single(a, b, eps=1e-8):
     """Correlation for a single pair of vectors (numba compatible)"""
+    std_a = np.std(a)
+    std_b = np.std(b)
+    if std_a < eps or std_b < eps:
+        return 0.0
     ma = a - np.mean(a)
     mb = b - np.mean(b)
     num = np.sum(ma * mb)
@@ -176,8 +183,8 @@ def stats_func_lv(x, max_lag=3, step_size=10):
         # --- 1. Find Extinction Index ---
         ext_ind = n_timesteps # Default to full length
         for t in range(n_timesteps):
-            if r_full[t] <= 0 or f_full[t] <= 0:
-                ext_ind = t + 1 # Include the first zero
+            if r_full[t] <= 1 or f_full[t] <= 1:
+                ext_ind = t+1
                 break
         
         # Slice the data for this replicate
@@ -206,8 +213,8 @@ def stats_func_lv(x, max_lag=3, step_size=10):
                 out[i, col_r] = batch_corr_single(r[:-lag], r[lag:], eps)
                 out[i, col_f] = batch_corr_single(f[:-lag], f[lag:], eps)
             else:
-                out[i, col_r] = np.nan
-                out[i, col_f] = np.nan
+                out[i, col_r] = 0 #np.nan
+                out[i, col_f] = 0 #np.nan
                 
     return out
 
@@ -223,9 +230,10 @@ def transcriptional_dynamics_step(
     scheme = 'constant', # Scheme
     scheme_params = [2], # Scheme hyperparameter
     stop_func = None,
-    sample_size = 256, T = 5, dt = 0.01, #simulation parameters (base)
+    sample_size = 512, T = 5, dt = 0.01, #simulation parameters (base)
     alpha = 0.5, num_particles = 500, cores = 4, #estimator parameters
     prior_domain = [[1,100],[1,100],[0,1.0]],
+    method = 'constant',
     **kwargs
 ):
     '''
@@ -238,6 +246,7 @@ def transcriptional_dynamics_step(
 
     ### Data generation or loading:
     if input_filename is None:
+        print(f"Simulating data with parameters: {physical_params} and heterogeneities: {heterogeneities}")
         ## Heterogeneity
         bp,gp = list(heterogeneities)
         if gp == None:
@@ -252,6 +261,7 @@ def transcriptional_dynamics_step(
         data_ = td.simulate(kplus, kminus, rburst, diffusivity, T, dt, sites, lengths)
         data = [np.asarray(d) for d in data_]
     else:
+        print(f"Loading data from: {input_filename}")
         with open(input_filename,'rb') as f:
             td_dat = pickle.load(f)
             data = td_dat['data']
@@ -298,9 +308,10 @@ def transcriptional_dynamics_step(
     #Maybe make this a function since it'll be repeated code...
     results_list = []
     est = init(init_params,scheme_params)
+    attr_list = info_dict[method]
     while not stop(est):
         loop(est)
-        results = get_info(est)
+        results = get_info(est,attr_list)
         results_list.append(results)
 
     return results_list
@@ -322,11 +333,7 @@ def stats_func_td(x):
     return out
 
 
-
-
-
 ##### Experiment function and dictionary of models
-
 model_dict = {
     'lv':lotka_volterra_step,
     'td':transcriptional_dynamics_step
@@ -424,6 +431,11 @@ constant_attr_list = [
 fvc_attr_list = constant_attr_list.copy()
 fvc_attr_list.append('v_total')
 fvc_attr_list.append('c')
+
+info_dict = {
+    'constant':constant_attr_list,
+    'fvc':fvc_attr_list
+}
 
 #Observes the data in est. Gets the information to store in the output
 def get_info(est,attr_list = constant_attr_list):

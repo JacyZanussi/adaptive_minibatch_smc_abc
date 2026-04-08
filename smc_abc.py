@@ -64,20 +64,36 @@ class smc_abc_iterator:
             if mweight_mat is None:
                 # Minor safety net for larger datasets
                 _,stats_obs = stats_func(data,data)
-                num_stats = stats_obs.shape[1]
+                num_stats = stats_obs.shape[1] if stats_obs.ndim > 1 else stats_obs.shape[0]
                 size = np.minimum(self.sample_size, 50*num_stats)
                 batch = np.random.choice(self.sample_size,size)
-                data_batched = data[batch] if type(data) == np.ndarray else len(data)
+                data_batched = data[batch] if type(data) == np.ndarray else [data[i] for i in batch]
                 _,stats_obs = stats_func(data_batched,data_batched)
                 #Take per-sample summary statistics of shape (sample_size,N_s), compute covariance.
-                if stats_obs.ndim > 1:
-                    stds = np.std(stats_obs, axis = 0, ddof=1)
-                    stds[stds == 0] = 1.0
-                    stats_scaled = stats_obs / stds
-                    shrunk_corr,_ = ledoit_wolf(stats_scaled)
-                    cov = np.outer(stds, stds) * shrunk_corr
-                else:
-                    return
+                # if stats_obs.ndim > 1:
+                #     stds = np.std(stats_obs, axis = 0, ddof=1)
+                #     stds[stds == 0] = 1.0
+                #     stats_scaled = stats_obs / stds
+                #     shrunk_corr,_ = ledoit_wolf(stats_scaled)
+                #     cov = np.outer(stds, stds) * shrunk_corr
+                if stats_obs.ndim <= 1:
+                    # NOTE: this is defunct. It turns out you can't easily bootstrap summary covariances per batch per particle (N_boot by N_particles)
+                    # Per-batch summary: bootstrap to estimate covariance
+                    n_bootstrap = 1000
+                    boot_stats = np.empty((n_bootstrap, stats_obs.shape[0]))  # (n_boot, N_s)
+                    for b in range(n_bootstrap):
+                        idx = np.random.choice(self.sample_size, size=self.sample_size, replace=True)
+                        data_boot = self.data[idx] if isinstance(self.data, np.ndarray) else [self.data[i] for i in idx]
+                        _, s_boot = stats_func(data_boot,data_boot)
+                        boot_stats[b] = s_boot # s_boot is shape (N_s,)
+                    stats_obs = boot_stats #reassign. Should be shaped (1000,N_s)
+                # ledoit_wolf for numerical stability of the inverse
+                # Inverse is calculated directly as below to save computational time, as opposed to computing a solve each simulation for distance.
+                stds = np.std(stats_obs, axis = 0, ddof=1)
+                stds[stds == 0] = 1.0
+                stats_scaled = stats_obs / stds
+                shrunk_corr,_ = ledoit_wolf(stats_scaled)
+                cov = np.outer(stds, stds) * shrunk_corr
                 self.mahalanobis_cov = cov
                 W_inv = np.linalg.pinv(cov,rcond = self.rcond)
                 self.W_inv = W_inv
@@ -92,6 +108,29 @@ class smc_abc_iterator:
                 dist = np.sqrt(dist_sq)
                 return dist, (dist < thr)
             self.dist_func = mahalanobis
+            ### Additionally, we define effective scalar variance and v_total estimates here
+            self.esv = lambda S: np.linalg.trace(self.W_inv @ S)
+            self.v_total_est = np.inf
+            self.init_sigma = self.esv(self.W_inv)
+            def estimate_v_total(est):
+                observed_stats_repeated = np.repeat(est.posterior_stats_ref, repeats = est.reps, axis=1)
+                delta = est.posterior_stats - observed_stats_repeated
+                if delta.ndim <= 2: 
+                    # NOTE: Critical flaw here. We can't bootstrap covariances of batches here, and this is covariance over particles, not observations.
+                    # This would be covariance of (N_particles, N_stats), which would give us covariance of stats across particles
+                    #Sigma = np.cov(delta.T)
+                    pass
+                else: #The dimensions are (N particles by N_bs batch size by N_s stats)
+                    cov_list = np.array([np.cov(x.T) for x in delta]) #(N by N_s by N_s)
+                    Sigma = np.mean(cov_list,axis=0)
+                    delta_reshaped = delta.reshape(self.num_particles, self.batch_size, self.reps, delta.shape[-1]) #Handles replicates
+                    batch_means = np.mean(delta_reshaped, axis=2)
+                    batch_centers = batch_means.mean(axis=1, keepdims=True)
+                    diff = batch_means - batch_centers
+                    Sigma = np.einsum('ijk,ijl->kl', diff, diff)/(self.num_particles * (self.batch_size - 1))
+                self.Sigma = Sigma
+                self.v_total_est = self.esv(Sigma)
+            self.estimate_v_total = estimate_v_total
         else:
             if callable:
                 self.dist_func = dist_func
@@ -166,7 +205,8 @@ class smc_abc_iterator:
         )
 
         rind = np.random.choice(self.sample_size,self.__batch_size_round__)
-        s,_ = self.stats_func(self.data[rind],self.data[rind])
+        dat = self.data[rind] if type(self.data) == np.ndarray else [self.data[i] for i in rind]
+        s,_ = self.stats_func(dat,dat)
         self.stats_shape = s.shape
 
         thetas = np.empty((self.accepted_per_generation,self.num_params))
@@ -364,7 +404,7 @@ class smc_abc_iterator:
         stats_ref = np.empty((self.num_particles,*self.stats_shape),dtype=self.dtype)
         posterior_batch_indices = self.batch_indices[self.posterior_indices]
         for i,batch_idx in enumerate(posterior_batch_indices):
-            obs_subset = self.data[batch_idx]
+            obs_subset = self.data[batch_idx] if type(self.data) == np.ndarray else [self.data[i] for i in batch_idx]
             stats_ref[i] = self.stats_func(obs_subset,obs_subset)[1]
         del posterior_batch_indices
         return stats_ref
