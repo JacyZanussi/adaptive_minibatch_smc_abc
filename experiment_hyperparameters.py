@@ -16,31 +16,47 @@ num_sims = 10
 sweeps_td = {
     # Transcriptional Dynamics 
     'constant' : experiments.make_parameter_list({
-                    'scheme_params':[[x] for x in [32,64,128,256,512]], 'scheme': ['constant']
+                    'scheme_params':[[x] for x in [32,64,128,256,512]], 
+                    'scheme': ['constant'],
+                    'input_filename': 'datasets/td.pkl'
                 }),
     'fvc_lambda' : experiments.make_parameter_list({
-                    'scheme_params':[[2,None,l] for l in [0,0.25,0.5,0.75,1.0]], 'scheme': ['fvc']
+                    'scheme_params':[[2,None,l] for l in [0,0.25,0.5,0.75,1.0]], 
+                    'scheme': ['fvc'],
+                    'input_filename': 'datasets/td.pkl'
                 }),
     'fvc_n0' : experiments.make_parameter_list({
-                    'scheme_params':[[n0,None,1.0] for n0 in [2,5,10,20,30]], 'scheme': ['fvc']
+                    'scheme_params':[[n0,None,1.0] for n0 in [2,5,10,20,30]], 
+                    'scheme': ['fvc'],
+                    'input_filename': 'datasets/td.pkl'
                 }),
     'fvc_c' : experiments.make_parameter_list({
-                    'scheme_params':[[2,c,1.0] for c in [0.1,0.2,0.3,0.4,None]], 'scheme': ['fvc']
+                    'scheme_params':[[2,c,1.0] for c in [0.1,0.2,0.3,0.4,None]], 
+                    'scheme': ['fvc'],
+                    'input_filename': 'datasets/td.pkl'
                 })
 }
 sweeps_lv = {
     # Lotka Volterra 
     'constant' : experiments.make_parameter_list({
-                    'scheme_params':[[x] for x in [8]], 'scheme': ['constant']
+                    'scheme_params':[[x] for x in [8]], 
+                    'scheme': ['constant'],
+                    'input_filename': 'datasets/lv_stochastic.pkl'
                 }),
     'fvc_lambda' : experiments.make_parameter_list({
-                    'scheme_params':[[2,None,l] for l in [0,0.25,0.5,0.75,1.0]], 'scheme': ['fvc']
+                    'scheme_params':[[2,None,l] for l in [0,0.25,0.5,0.75,1.0]], 
+                    'scheme': ['fvc'],
+                    'input_filename': 'datasets/lv_stochastic.pkl'
                 }),
     'fvc_n0' : experiments.make_parameter_list({
-                    'scheme_params':[[n0,None,1.0] for n0 in [2,4,8,16]], 'scheme': ['fvc']
+                    'scheme_params':[[n0,None,1.0] for n0 in [2,4,8,16]], 
+                    'scheme': ['fvc'],
+                    'input_filename': 'datasets/lv_stochastic.pkl'
                 }),
     'fvc_c' : experiments.make_parameter_list({
-                    'scheme_params':[[2,c,1.0] for c in [0.1,0.2,0.3,0.4,None]], 'scheme': ['fvc']
+                    'scheme_params':[[2,c,1.0] for c in [0.1,0.2,0.3,0.4,None]], 
+                    'scheme': ['fvc'],
+                    'input_filename': 'datasets/lv_stochastic.pkl'
                 })
 }
 

@@ -7,7 +7,7 @@ import lotka_volterra as lv
 import transcriptional_dynamics as td
 import numpy as np
 import pickle
-import time
+
 
 
 # Lotka Volterra
