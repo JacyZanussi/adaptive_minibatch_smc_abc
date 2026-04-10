@@ -51,7 +51,7 @@ gp,bp = 4,2
 lengths = np.random.gamma(shape = gp, scale = 1/gp, size = (sample_size,))
 sites = np.random.beta(a = bp, b = bp, size = (sample_size,)) * lengths
 
-data = td.simulate(kplus, kminus, rburst, diffusivity, t_max, dt, sites, lengths)
+data = td.simulate(kplus, kminus, rburst, diffusivity, t_max, dt, sites, lengths, seed=0)
 
 dataset = {
     'data':list(data),

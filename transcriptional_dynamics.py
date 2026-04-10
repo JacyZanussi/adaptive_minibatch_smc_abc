@@ -197,8 +197,10 @@ def spatial_dynamics(Tbirth_sd, Nbirths_sd, class_index_sd,
 # ---------------------------------------------------------------------------
 
 @njit
-def simulate(kplus, kminus, rburst, D, T, dt, z, lengths):
+def simulate(kplus, kminus, rburst, D, T, dt, z, lengths, seed=-1):
     """Full spatial + population simulation."""
+    if seed >= 0:
+        np.random.seed(seed)
     Tbirth_sd, Nbirths_sd, class_index_sd = population_dynamics(
         z, kplus, kminus, rburst, T
     )

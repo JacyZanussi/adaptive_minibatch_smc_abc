@@ -4,7 +4,7 @@ import timeit
 from matplotlib import pyplot as plt
 from numba import njit
 
-def uniform_prior(prior_domain):
+def uniform_prior(prior_domain, seed = None):
     # Ensure it's a clean, picklable NumPy array
     prior_domain = np.ascontiguousarray(prior_domain, dtype=np.float64)
     lower = prior_domain[:, 0]
@@ -14,7 +14,12 @@ def uniform_prior(prior_domain):
     vol = np.prod(upper - lower)
 
     # These wrappers only reference the arrays, which pickle perfectly
-    def prior_func():
+    base_rng = np.random.default_rng(seed) if seed is not None else None
+    def prior_func(rng=None):
+        if rng is not None:
+            return rng.uniform(lower, upper)
+        if base_rng is not None:
+            return base_rng.uniform(lower, upper)
         return n_sample(lower, upper)
 
     def density(x):

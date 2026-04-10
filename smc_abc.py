@@ -9,7 +9,6 @@ import sys
 import time
 
 import numpy as np
-from numpy import random as rnd
 
 import joblib
 from joblib import Parallel, delayed
@@ -35,7 +34,7 @@ class smc_abc_iterator:
     """
 
     def __init__(self,data,model,stats_func,prior,dist_func='mahalanobis',mweight_mat = None,num_particles=1000,alpha=0.5,ess_prop = 0.5, seed = None,
-                sample_size = np.inf,batch_size=np.inf,batch_size_min=1,batch_size_max=np.inf,num_reps=1,sample_with_replacement=True, print_output = True,
+                sample_size = np.inf,batch_size=np.inf,batch_size_min=2,batch_size_max=np.inf,num_reps=1,sample_with_replacement=True, print_output = True,
                 cores=-1,parallel_batch_size='auto',backend='loky', rcond = 1e-15, epsilon = 1e-6, low_mem = False):
         self.data = data
         self.model = model
@@ -51,10 +50,12 @@ class smc_abc_iterator:
         else:
             self.sample_size = int(data.shape[0]) if type(data) == np.ndarray else len(data)
         self.batch_size_min = batch_size_min
-        self.batch_size_max = batch_size_max 
+        self.batch_size_max = batch_size_max
         self.batch_size = batch_size
         self.reps = num_reps
         self.sample_with_replacement = sample_with_replacement
+        self.seed = seed
+        self._main_rng = np.random.default_rng(seed)
 
         ## Distance function initialization
         self.rcond = rcond
@@ -66,7 +67,7 @@ class smc_abc_iterator:
                 _,stats_obs = stats_func(data,data)
                 num_stats = stats_obs.shape[1] if stats_obs.ndim > 1 else stats_obs.shape[0]
                 size = np.minimum(self.sample_size, 50*num_stats)
-                batch = np.random.choice(self.sample_size,size)
+                batch = self._main_rng.choice(self.sample_size,size)
                 data_batched = data[batch] if type(data) == np.ndarray else [data[i] for i in batch]
                 _,stats_obs = stats_func(data_batched,data_batched)
                 #Take per-sample summary statistics of shape (sample_size,N_s), compute covariance.
@@ -82,7 +83,7 @@ class smc_abc_iterator:
                     n_bootstrap = 1000
                     boot_stats = np.empty((n_bootstrap, stats_obs.shape[0]))  # (n_boot, N_s)
                     for b in range(n_bootstrap):
-                        idx = np.random.choice(self.sample_size, size=self.sample_size, replace=True)
+                        idx = self._main_rng.choice(self.sample_size, size=self.sample_size, replace=True)
                         data_boot = self.data[idx] if isinstance(self.data, np.ndarray) else [self.data[i] for i in idx]
                         _, s_boot = stats_func(data_boot,data_boot)
                         boot_stats[b] = s_boot # s_boot is shape (N_s,)
@@ -155,6 +156,7 @@ class smc_abc_iterator:
         ## Auxiliary or updated per generation
         self.seed = seed
         self._seedseq = np.random.SeedSequence(seed)
+        self._main_rng = np.random.default_rng(seed)
         self.generation = 0
         sample = prior_[0]()
         self.num_params = sample.shape[0]
@@ -204,7 +206,7 @@ class smc_abc_iterator:
             resample_batch_size = self.accepted_per_generation 
         )
 
-        rind = np.random.choice(self.sample_size,self.__batch_size_round__)
+        rind = self._main_rng.choice(self.sample_size,self.__batch_size_round__)
         dat = self.data[rind] if type(self.data) == np.ndarray else [self.data[i] for i in rind]
         s,_ = self.stats_func(dat,dat)
         self.stats_shape = s.shape
@@ -238,17 +240,19 @@ class smc_abc_iterator:
 
     #generic sampling function for generations > 0
     #Can be generalized
-    def sample_func(self):
+    def sample_func(self, rng=None):
+        if rng is None:
+            rng = self._main_rng
         prior_domain = self.prior[1]
         in_prior_domain = False
         while not in_prior_domain:
             w = self.weights
-            p_ = self.posterior[rnd.choice(w.shape[0],p=w)]
+            p_ = self.posterior[rng.choice(w.shape[0],p=w)]
             if self.num_params == 1:
-                p = rnd.normal(p_,self.kernel_std)
+                p = rng.normal(p_,self.kernel_std)
                 in_prior_domain = (prior_domain[0] <= p) and (p <= prior_domain[1])
             elif self.num_params > 1:
-                p = rnd.multivariate_normal(p_, self.kernel_var)
+                p = rng.multivariate_normal(p_, self.kernel_var)
                 in_prior_domain = np.all(prior_domain[0] <= p) and np.all(p <= prior_domain[1])
             else:
                 print("Something's wrong with the sample function")
@@ -427,7 +431,7 @@ class smc_abc_iterator:
         if proportion is None:
             proportion = self.ess_prop
         if self.ESS <= np.ceil(self.num_particles * proportion):
-            self.posterior = self.posterior[np.random.choice(range(self.num_particles),p=self.weights,size=self.num_particles,replace = True)]
+            self.posterior = self.posterior[self._main_rng.choice(range(self.num_particles),p=self.weights,size=self.num_particles,replace = True)]
             self.weights = np.ones((self.num_particles,)) / self.num_particles 
             print("Resampling")
     @property
@@ -455,7 +459,7 @@ def parloop(p,batch_size,sample_size,generation,sample_func,prior,model,stats_fu
     #Seeding
     global_int = int(seed.generate_state(1)[0])
     np.random.seed(global_int)
-    rng = np.random.default_rng(seed)
+    rng = np.random.default_rng(global_int)
 
     num_sims = 0
     dist_criteria = False
@@ -467,8 +471,12 @@ def parloop(p,batch_size,sample_size,generation,sample_func,prior,model,stats_fu
             batch_indices = np.array([rng.permutation(sample_size)[:batch_size] for _ in range(resample_batch_size)])
         for bi in batch_indices:
             num_sims += 1
-            params = np.array(sample_func()) if generation > 0 else np.array(prior[0]())
-            sim,ref_sim = model(params,bi) 
+            params = np.array(sample_func(rng)) if generation > 0 else np.array(prior[0](rng))
+            sim_seed = int(rng.integers(np.iinfo(np.int64).max))
+            try:
+                sim,ref_sim = model(params,bi,seed=sim_seed)
+            except TypeError:
+                sim,ref_sim = model(params,bi)
             sim_stats,ref_sim_stats = stats_func(sim,ref_sim)
             dist,dist_criteria = dist_func(sim_stats,ref_sim_stats,threshold)
             if dist_criteria:

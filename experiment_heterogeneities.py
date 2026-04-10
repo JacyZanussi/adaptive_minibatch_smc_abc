@@ -9,9 +9,11 @@ import sys
 satid = int(sys.argv[1])
 print(f"Slurm Array Task ID: {satid}")
 
-
 num_sims = 10
 
+
+
+# We use n0 + automatic c selection to sweep across various c values, since they are likely changed by n0
 #Baseline constant and fvc can be obtained from the hyperparameter sweep
 sweeps_td = { #baseline: [2,4] [bp,gp]
     'constant_gamma_param' : experiments.make_parameter_list({
@@ -25,13 +27,13 @@ sweeps_td = { #baseline: [2,4] [bp,gp]
 }
 
 sweeps_lv = { #baseline: [4,0.01,4]
-    'constant_alpha' : experiments.make_parameter_list({
+    'constant_ic_range' : experiments.make_parameter_list({
         'scheme_params':[[x] for x in [32,64,128]],
-        'physical_params' : [[w] for w in [1,201,501,901]], 'scheme':['constant']
+        'physical_params' : [[w] for w in [1,251,501,751]], 'scheme':['constant']
     }),
-    'fvc_alpha' : experiments.make_parameter_list({
+    'fvc_ic_range' : experiments.make_parameter_list({
         'scheme_params':[[n0,None,1] for n0 in [2,4,8]],
-        'physical_params' : [[w] for w in [1,201,501,901]], 'scheme':['fvc']
+        'physical_params' : [[w] for w in [1,251,501,751]], 'scheme':['fvc']
     })
 }
 

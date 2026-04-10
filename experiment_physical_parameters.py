@@ -52,11 +52,11 @@ sweeps_lv = { #baseline: [4,0.01,4]
     }),
     'constant_beta' : experiments.make_parameter_list({
         'scheme_params':[[x] for x in [32,64,128]],
-        'physical_params' : [[4,b,4] for b in [0.05,0.02]], 'scheme':['constant']
+        'physical_params' : [[4,b,4] for b in [0.005,0.02]], 'scheme':['constant']
     }),
     'fvc_beta' : experiments.make_parameter_list({
         'scheme_params':[[n0,None,1] for n0 in [2,4,8]],
-        'physical_params' : [[4,b,4] for b in [0.05,0.02]], 'scheme':['fvc']
+        'physical_params' : [[4,b,4] for b in [0.005,0.02]], 'scheme':['fvc']
     }),
     'constant_gamma' : experiments.make_parameter_list({
         'scheme_params':[[x] for x in [32,64,128]],

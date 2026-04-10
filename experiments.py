@@ -74,7 +74,7 @@ def lotka_volterra_step(
     scheme = 'constant', # Scheme
     scheme_params = [2], # Scheme hyperparameter
     stop_func = None,
-    sample_size = 1024, T = 5, dt = 0.01, #simulation parameters (base)
+    sample_size = 128, T = 5, dt = 0.01, #simulation parameters (base)
     alpha = 0.5, num_particles = 500, cores = 4, #estimator parameters
     prior_domain = [[0.0,10.0],[0.0,0.05],[0.0,10.0]],
     method = 'constant',
@@ -91,7 +91,7 @@ def lotka_volterra_step(
         assert (ic_range >= 1) and (ic_range < 1000)
         shift = 500 - (ic_range - 1)/2
         ic = rng.choice(ic_range,(sample_size,2)) + shift
-        _,data_temp = lv.tau_leaping(ic,T,a,b,g,d,dt = dt)
+        _,data_temp = lv.tau_leaping(ic,T,a,b,g,d,dt = dt, seed=seed if seed is not None else -1)
     else:
         print(f"Loading data from: {input_filename}")
         with open(input_filename,'rb') as f:
@@ -105,17 +105,19 @@ def lotka_volterra_step(
 
     #s_data = stats_func_lv(data)
     N_stats = data.shape[1]
-    def model(p, Bi, num_reps=3):
+    def model(p, Bi, num_reps=3, seed=None):
         alpha, beta, gamma = p
         s_sim = np.zeros((Bi.shape[0],N_stats))
+        rep_rng = np.random.default_rng(seed) if seed is not None else None
         for _ in range(3):
-            _, sim = lv.tau_leaping(ic[Bi], T,alpha, beta, gamma, d, dt=dt)
+            rep_seed = int(rep_rng.integers(np.iinfo(np.int64).max)) if rep_rng is not None else -1
+            _, sim = lv.tau_leaping(ic[Bi], T,alpha, beta, gamma, d, dt=dt, seed=rep_seed)
             s_sim += stats_func_lv(sim)
         s_sim /= num_reps
         s_obs = data[Bi]
         return s_sim, s_obs
     ### Prior
-    prior = utils.uniform_prior(prior_domain)
+    prior = utils.uniform_prior(prior_domain, seed=seed)
 
     ### Scheme
     if scheme == 'constant':
@@ -258,7 +260,7 @@ def transcriptional_dynamics_step(
         else:
             sites = rng.beta(a = bp,b = bp, size = (sample_size,)) * lengths
         ## Simulate data
-        data_ = td.simulate(kplus, kminus, rburst, diffusivity, T, dt, sites, lengths)
+        data_ = td.simulate(kplus, kminus, rburst, diffusivity, T, dt, sites, lengths, seed=seed if seed is not None else -1)
         data = [np.asarray(d) for d in data_]
     else:
         print(f"Loading data from: {input_filename}")
@@ -269,15 +271,15 @@ def transcriptional_dynamics_step(
             lengths = td_dat['lengths']
 
     ### Simulator
-    def model(p,Bi):
+    def model(p,Bi,seed=None):
         z = sites[Bi,]
         l = lengths[Bi,]
         obs_data = [data[i] for i in Bi]
-        sim = td.simulate(p[0], kminus, p[1], p[2], T, dt, z, l)
+        sim = td.simulate(p[0], kminus, p[1], p[2], T, dt, z, l, seed if seed is not None else -1)
         return sim, obs_data
 
     ### Prior
-    prior = utils.uniform_prior(prior_domain)
+    prior = utils.uniform_prior(prior_domain,seed = seed)
 
     def stats_func(x,y,sf = stats_func_td):
         return sf(x),sf(y)
