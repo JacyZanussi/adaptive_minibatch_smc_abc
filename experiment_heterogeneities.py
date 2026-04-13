@@ -29,11 +29,11 @@ sweeps_td = { #baseline: [2,4] [bp,gp]
 sweeps_lv = { #baseline: [4,0.01,4]
     'constant_ic_range' : experiments.make_parameter_list({
         'scheme_params':[[x] for x in [32,64,128]],
-        'physical_params' : [[w] for w in [1,251,501,751]], 'scheme':['constant']
+        'heterogeneities' : [[w] for w in [1,251,501,751]], 'scheme':['constant']
     }),
     'fvc_ic_range' : experiments.make_parameter_list({
         'scheme_params':[[n0,None,1] for n0 in [2,4,8]],
-        'physical_params' : [[w] for w in [1,251,501,751]], 'scheme':['fvc']
+        'heterogeneities' : [[w] for w in [1,251,501,751]], 'scheme':['fvc']
     })
 }
 

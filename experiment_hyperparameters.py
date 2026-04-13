@@ -78,6 +78,3 @@ print(param_list)
 
 filename = 'results/' + model + "_" + sweep_name + '.pkl'
 experiments.simulate_experiment(filename, param_list, model, num_sims=num_sims)
-
-
-

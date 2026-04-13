@@ -57,7 +57,13 @@ from itertools import product
 
 from numba import njit
 
-from matplotlib import pyplot as plt
+#from matplotlib import pyplot as plt
+
+import matplotlib.pyplot as plt
+import matplotlib.ticker as ticker
+from matplotlib.ticker import AutoMinorLocator
+import numpy as np
+
 
 #A class that generates smfish transcriptional dynamics snapshots
 import lotka_volterra as lv
@@ -145,10 +151,9 @@ def lotka_volterra_step(
     #Maybe make this a function since it'll be repeated code...
     results_list = []
     est = init(init_params,scheme_params)
-    attr_list = info_dict[method]
     while not stop(est):
         loop(est)
-        results = get_info(est,attr_list)
+        results = get_info(est)
         results_list.append(results)
 
     return results_list
@@ -310,10 +315,9 @@ def transcriptional_dynamics_step(
     #Maybe make this a function since it'll be repeated code...
     results_list = []
     est = init(init_params,scheme_params)
-    attr_list = info_dict[method]
     while not stop(est):
         loop(est)
-        results = get_info(est,attr_list)
+        results = get_info(est)
         results_list.append(results)
 
     return results_list
@@ -423,31 +427,23 @@ def default_stop(est):
     return ((est.snr < 2) or (est.acceptance_rate < 0.02)) and (est.generation > 5)
 
 
-## Maybe make these values reportable from the smc abc class? 
-constant_attr_list = [
+attr_list = [
     'total_time','total_sims', # cost
     'log_hdpr_product', 'alpha_threshold', 'v_total_est', 'snr','acceptance_rate', # accuracy
-    'batch_size',
-    'hdpr_marginal', 'ESS' #In case we need it.
+    'batch_size', 'v_total', 'c',
+    'hdpr_marginal', 'ESS'
 ]
-fvc_attr_list = constant_attr_list.copy()
-fvc_attr_list.append('v_total')
-fvc_attr_list.append('c')
-
-info_dict = {
-    'constant':constant_attr_list,
-    'fvc':fvc_attr_list
-}
 
 #Observes the data in est. Gets the information to store in the output
-def get_info(est,attr_list = constant_attr_list):
+def get_info(est,attr_list = attr_list):
     dict = {}
     for attr in attr_list:
-        dat = getattr(est,attr)
-        if callable(dat):
-            dict[attr] = dat()
-        else:
-            dict[attr] = dat
+        if hasattr(est,attr):
+            dat = getattr(est,attr)
+            if callable(dat):
+                dict[attr] = dat()
+            else:
+                dict[attr] = dat
     return dict
 
 def make_parameter_list(sweep_config):
@@ -560,6 +556,8 @@ def get_attr(results, attr, trunc=True, slice=None):
 
     return output
 
+
+
 #helps get quantiles as used in the plots.
 def get_quantiles(attr_dict,q = [0.25,0.5,0.75]):
     out = {}
@@ -638,3 +636,502 @@ def plot_ts(x_axis,y_axis,fig_ax = None, grid_lines = False, #basics
         pass #plott here
     return fig,ax
 
+
+
+def noise(res,trunc = True):
+    v_total = get_attr(res,'v_total_est',trunc=trunc)
+    n = get_attr(res,'batch_size',trunc=trunc)
+    output = {}
+    for k in res.keys():
+        output[k] = v_total[k] / n[k]
+    return output
+noise.__name__ = 'noise'
+
+def time_series(
+    results_filename,
+    attr_list=[
+        'total_time', 'total_sims', 'log_hdpr_product', 'acceptance_rate',
+        'v_total_est', 'alpha_threshold', 'snr', 'batch_size', 'ESS'
+    ],
+    attr_ylabels=[
+        r'\mathrm{Wall\ Time\ (s)}',
+        r'\mathrm{Simulations}',
+        r'\log\!\left(\prod_i \ell_i\right)',
+        r'\mathrm{Acceptance\ Rate}',
+        r'v_t',
+        r'\epsilon_t',
+        r'\mathrm{SNR} = \epsilon_t^2 / (v_t / n)',
+        r'\mathrm{Batch\ Size}\ (n)',
+        r'\mathrm{ESS}',
+    ],
+    attr_transform=[
+        'id','id','id','id','id','id','id','id','id'
+    ],
+    legend_key_index=0,
+    legend_title=None,        # e.g. r'\alpha' — defaults to \theta_{i}
+    errorbar_cmap='viridis',
+    quantiles=[0.25, 0.5, 0.75],
+    out_path = None,
+    plot_args={},
+):
+    """
+    Plot each attribute in attr_list as a time series over SMC ABC generations,
+    with inter-replicate quantile error bars. One SVG is saved per attribute.
+
+    Parameters
+    ----------
+    results_filename : str
+        Path to a .pkl results file.
+    attr_list : list of str
+        Attributes to extract and plot.
+    attr_ylabels : list of str
+        Raw LaTeX strings for y-axis labels (no outer $…$ needed).
+    attr_transform : list of {'id', 'log'}
+        Per-attribute transform applied before quantile computation.
+    legend_key_index : int
+        Index into each param tuple used as the legend entry value.
+    legend_title : str or None
+        LaTeX string for the legend title. Defaults to r'\theta_{i}'.
+    errorbar_cmap : str or Colormap
+        Matplotlib colormap for colouring each param-tuple curve.
+    quantiles : list of 3 floats
+        [lower, median, upper] quantile levels passed to get_quantiles.
+    plot_args : dict
+        Extra kwargs forwarded to ax.errorbar.
+    """
+
+    import matplotlib.pyplot as plt
+    import matplotlib.ticker as ticker
+    from matplotlib.ticker import AutoMinorLocator
+    import numpy as np
+
+    # ── LaTeX + font setup ────────────────────────────────────────────────────
+    plt.rcParams.update({
+        'text.usetex': True,
+        'font.family': 'serif',
+        'font.serif': ['Computer Modern Roman'],
+        'axes.labelsize': 11,
+        'axes.titlesize': 11,
+        'xtick.labelsize': 9,
+        'ytick.labelsize': 9,
+        'legend.fontsize': 8,
+        'legend.title_fontsize': 9,
+        'figure.dpi': 150,
+        'savefig.dpi': 600,
+        'lines.linewidth': 1.4,
+        'errorbar.capsize': 2.5,
+    })
+
+    handle = results_filename[:-4]
+    results = load(results_filename)
+
+    transforms = {
+        'id':  lambda x: x,
+        'log': lambda x: np.log(x),
+    }
+    ylabel_prefixes = {
+        'id':  '',
+        'log': r'\ln\,',
+    }
+
+    # ── Resolve colormap ──────────────────────────────────────────────────────
+    cmap = (
+        plt.get_cmap(errorbar_cmap)
+        if isinstance(errorbar_cmap, str)
+        else errorbar_cmap
+    )
+
+    for attr, ylab, transform_name in zip(attr_list, attr_ylabels, attr_transform):
+
+        f      = transforms[transform_name]
+        tylab  = ylabel_prefixes[transform_name]
+
+        # Apply transform before quantile computation (statistically correct)
+        # raw         = get_attr(results, attr, trunc=True)
+        # Inside the attr loop, replace the raw = get_attr(...) line:
+        if callable(attr):
+            #raw = get_derived(results, attr, trunc=True)
+            raw = attr(results)
+            attr_name = attr.__name__  # use for filename; name your lambdas accordingly
+        else:
+            raw = get_attr(results, attr, trunc=True)
+            attr_name = attr
+        transformed = {k: f(np.array(v, dtype=float)) for k, v in raw.items()}
+        res_attr    = get_quantiles(transformed, q=quantiles)
+
+        keys   = list(res_attr.keys())
+        n_keys = len(keys)
+        colors = [cmap(i / max(n_keys - 1, 1)) for i in range(n_keys)]
+
+        # ── Figure ────────────────────────────────────────────────────────────
+        fig, ax = plt.subplots(figsize=(5, 3.5))
+
+        for color, k in zip(colors, keys):
+            q_arr = res_attr[k]          # (3, T)
+            T     = q_arr.shape[1]
+            gens  = np.arange(T)
+
+            med   = q_arr[1, :]
+            lower = q_arr[1, :] - q_arr[0, :]   # median − q_low  (positive)
+            upper = q_arr[2, :] - q_arr[1, :]   # q_high − median (positive)
+
+            legend_val = k[legend_key_index]
+            # Format: integers cleanly, floats in scientific if small
+            if isinstance(legend_val, float) and abs(legend_val) < 0.01:
+                label = rf'${legend_val:.2e}$'
+            else:
+                label = rf'${legend_val}$'
+
+            ax.errorbar(
+                gens, med,
+                yerr=np.stack([lower, upper], axis=0),
+                color=color,
+                label=label,
+                linewidth=1.4,
+                capsize=2.5,
+                capthick=0.9,
+                elinewidth=0.7,
+                **plot_args,
+            )
+
+        # ── Axis labels ───────────────────────────────────────────────────────
+        ax.set_xlabel(r'Generation')
+        ax.set_ylabel(rf'${tylab}{ylab}$')
+
+        # ── Ticks: publication style (inward, all four sides) ────────────────
+        ax.tick_params(axis='both', which='major',
+                       direction='in', top=True, right=True, length=4)
+        ax.xaxis.set_minor_locator(AutoMinorLocator())
+        ax.yaxis.set_minor_locator(AutoMinorLocator())
+        ax.tick_params(axis='both', which='minor',
+                       direction='in', top=True, right=True, length=2)
+        ax.spines['top'].set_visible(True)
+        ax.spines['right'].set_visible(True)
+
+        # Integer x-ticks only (generations are whole numbers)
+        ax.xaxis.set_major_locator(ticker.MaxNLocator(integer=True))
+
+        # ── Legend ────────────────────────────────────────────────────────────
+        ltitle = (
+            legend_title
+            if legend_title is not None
+            else rf'$\theta_{{{legend_key_index}}}$'
+        )
+        ax.legend(
+            title=ltitle,
+            framealpha=0.85,
+            edgecolor='0.75',
+            handlelength=1.8,
+        )
+
+        fig.tight_layout()
+        if out_path is None:
+            out_path = f'{handle}_{attr}.svg'
+        plt.savefig(out_path, dpi=600, format='svg', bbox_inches='tight')
+        plt.close(fig)
+        print(f'Saved: {out_path}')
+
+# To do: Change the marker of one of them.
+# To do: fix output filename default 
+def pareto_frontier(
+    ref_filename,
+    novel_filename,
+    x_attr='total_time',
+    y_attr='log_hdpr_product',
+    x_label=r'\mathrm{Wall\ Time\ (s)}',
+    y_label=r'\log\!\left(\prod_i \ell_i\right)',
+    x_transform='id',
+    y_transform='id',
+    ref_label=r'\mathrm{Constant\ SMC\ ABC}',
+    novel_label=r'\mathrm{Adaptive\ SMC\ ABC}',
+    ref_cmap='Oranges',
+    novel_cmap='Blues',
+    legend_key_index_ref=0,
+    legend_key_index=0,
+    legend_title=None,
+    auto_c_color='magenta',
+    auto_c_marker='*',
+    auto_c_label=r'\mathrm{auto}',
+    plot_args={},
+    out_filename=None,
+):
+    """
+    Plot Pareto frontiers comparing constant minibatch SMC-ABC (reference)
+    against adaptive SMC-ABC (novel), sweeping over hyperparameters.
+
+    Each point is the last-generation value per replicate (no truncation),
+    with quantile error bars across replicates.
+
+    Keys with None at legend_key_index are treated as the auto-selected c run:
+    plotted in a contrasting color (default magenta) with a star marker, and
+    labelled with the estimated mean c across replicates/generations.
+
+    Parameters
+    ----------
+    ref_filename : str
+        Path to reference (constant minibatch) .pkl results file.
+    novel_filename : str
+        Path to novel (adaptive) .pkl results file.
+    x_attr : str or callable
+        Cost metric. String key or fn(gen_dict)->scalar.
+    y_attr : str or callable
+        Accuracy metric. String key or fn(gen_dict)->scalar.
+    x_label : str
+        Raw LaTeX string for x-axis label.
+    y_label : str
+        Raw LaTeX string for y-axis label.
+    x_transform : {'id', 'log'}
+        Transform applied to x values before quantile computation.
+    y_transform : {'id', 'log'}
+        Transform applied to y values before quantile computation.
+    ref_label : str
+        LaTeX display name for the reference method (legend title).
+    novel_label : str
+        LaTeX display name for the novel method (legend title).
+    ref_cmap : str or Colormap
+        Colormap for reference method curves.
+    novel_cmap : str or Colormap
+        Colormap for novel method curves.
+    legend_key_index : int
+        Index into each param tuple used as the legend entry value.
+    legend_title : str or None
+        Shared sweep-parameter label, e.g. r'\alpha'. Defaults to \theta_{i}.
+    auto_c_color : str
+        Color for the auto-c point. Default 'magenta'.
+    auto_c_marker : str
+        Marker for the auto-c point. Default '*'.
+    auto_c_label : str
+        Raw LaTeX string appended as the legend label for the auto-c point.
+    plot_args : dict
+        Extra kwargs forwarded to ax.errorbar for sweep points.
+    out_filename : str or None
+        Output SVG path. Defaults to '{ref_handle}_vs_{novel_handle}_pareto.svg'.
+    """
+
+    # import matplotlib.pyplot as plt
+    # import matplotlib.ticker as ticker
+    # from matplotlib.ticker import AutoMinorLocator
+    # import numpy as np
+
+    plt.rcParams.update({
+        'text.usetex': True,
+        'font.family': 'serif',
+        'font.serif': ['Computer Modern Roman'],
+        'axes.labelsize': 11,
+        'axes.titlesize': 11,
+        'xtick.labelsize': 9,
+        'ytick.labelsize': 9,
+        'legend.fontsize': 8,
+        'legend.title_fontsize': 9,
+        'figure.dpi': 150,
+        'savefig.dpi': 600,
+        'lines.linewidth': 1.4,
+    })
+
+    transforms = {'id': lambda x: x, 'log': np.log}
+    fx = transforms[x_transform]
+    fy = transforms[y_transform]
+
+    def _resolve_cmap(c):
+        return plt.get_cmap(c) if isinstance(c, str) else c
+
+    ref_cmap_fn   = _resolve_cmap(ref_cmap)
+    novel_cmap_fn = _resolve_cmap(novel_cmap)
+
+    # ── Load ──────────────────────────────────────────────────────────────────
+    ref_results   = load(ref_filename)
+    novel_results = load(novel_filename)
+
+    def _extract(results, attr, f):
+        """Last-gen value per replicate, no truncation, then transform."""
+        if callable(attr):
+            #raw = get_derived(results, attr, trunc=False)
+            raw = attr(results)
+        else:
+            raw = get_attr(results, attr, trunc=False, slice=-1)
+        return {k: f(np.array(v, dtype=float)) for k, v in raw.items()}
+
+    def _quantiles(d):
+        return get_quantiles(d, q=[0.25, 0.5, 0.75])
+
+    ref_x   = _quantiles(_extract(ref_results,   x_attr, fx))
+    ref_y   = _quantiles(_extract(ref_results,   y_attr, fy))
+    novel_x = _quantiles(_extract(novel_results, x_attr, fx))
+    novel_y = _quantiles(_extract(novel_results, y_attr, fy))
+
+    # ── Partition novel keys: sweep vs auto-c ─────────────────────────────────
+    def _is_auto(k):
+        return k[legend_key_index] is None
+
+    novel_sweep_keys = [k for k in novel_x.keys() if not _is_auto(k)]
+    novel_auto_keys  = [k for k in novel_x.keys() if     _is_auto(k)]
+
+    # ── Estimate mean c for auto keys (from raw results, attr 'c') ───────────
+    def _mean_c(results, keys):
+        """Average c across all replicates and generations for each auto key."""
+        estimates = {}
+        for k in keys:
+            replicates = results[k]
+            vals = [
+                gen['c']
+                for replicate in replicates
+                for gen in replicate
+                if 'c' in gen
+            ]
+            estimates[k] = np.mean(vals) if vals else float('nan')
+        return estimates
+    def check_c(results):
+        '''If c is in first result, returns True.'''
+        keys = [k for k in results.keys()]
+        if 'c' in results[keys[0]][0][0]:
+            return True
+        else:
+            return False
+    def calc_mean_c(results):
+        if check_c(results):
+            c_list = get_attr(results,'c',trunc = False,slice = -1)
+            outputs ={}
+            for k in results.keys():
+                outputs[k] = np.mean(c_list[k])
+        else:
+            outputs = {}
+            for k in results.keys():
+                outputs[k] = np.nan
+        return outputs
+    #auto_c_estimates = _mean_c(novel_results, novel_auto_keys)
+    auto_c_estimates = calc_mean_c(novel_results)
+
+    # ── Colors for sweep points ───────────────────────────────────────────────
+    def _colors(cmap_fn, n, lo=0.35, hi=0.90):
+        return [cmap_fn(lo + (hi - lo) * i / max(n - 1, 1)) for i in range(n)]
+
+    ref_colors         = _colors(ref_cmap_fn,   len(ref_x))
+    novel_sweep_colors = _colors(novel_cmap_fn, len(novel_sweep_keys))
+
+    # ── Figure ────────────────────────────────────────────────────────────────
+    fig, ax = plt.subplots(figsize=(5.5, 4.0))
+
+    # shared errorbar style
+    _eb_kw = dict(
+        linewidth=0, marker='o', markersize=4.5,
+        capsize=2.5, capthick=0.9, elinewidth=0.8,
+    )
+
+    def _label_val(val):
+        if isinstance(val, float) and abs(val) < 0.01:
+            return rf'${val:.2e}$'
+        return rf'${val}$'
+
+    # ── Reference sweep ───────────────────────────────────────────────────────
+    ref_handles, ref_labels = [], []
+    gray_line_list = []
+    for color, k in zip(ref_colors, ref_x.keys()):
+        qx, qy = ref_x[k], ref_y[k]
+        gray_line_list.append([qx[1],qy[1]])
+        eb = ax.errorbar(
+            qx[1], qy[1],
+            xerr=[[qx[1]-qx[0]], [qx[2]-qx[1]]],
+            yerr=[[qy[1]-qy[0]], [qy[2]-qy[1]]],
+            color=color, **_eb_kw, **plot_args,
+        )
+        ref_handles.append(eb)
+        ref_labels.append(_label_val(k[legend_key_index_ref]))
+    # Grey connecting line
+    gray_line_list = np.array(gray_line_list)
+    ax.plot(gray_line_list[:,0],gray_line_list[:,1],color = 'gray',linewidth=1,alpha = 0.5)
+
+    # ── Novel sweep ───────────────────────────────────────────────────────────
+    novel_handles, novel_labels = [], []
+    for color, k in zip(novel_sweep_colors, novel_sweep_keys):
+        qx, qy = novel_x[k], novel_y[k]
+        eb = ax.errorbar(
+            qx[1], qy[1],
+            xerr=[[qx[1]-qx[0]], [qx[2]-qx[1]]],
+            yerr=[[qy[1]-qy[0]], [qy[2]-qy[1]]],
+            color=color, **_eb_kw, **plot_args,
+        )
+        novel_handles.append(eb)
+        novel_labels.append(_label_val(k[legend_key_index]))
+
+    # ── Auto-c points (magenta star, one per auto key) ────────────────────────
+    auto_handles, auto_labels = [], []
+    for k in novel_auto_keys:
+        qx, qy   = novel_x[k], novel_y[k]
+        mean_c   = auto_c_estimates[k]
+        eb = ax.errorbar(
+            qx[1], qy[1],
+            xerr=[[qx[1]-qx[0]], [qx[2]-qx[1]]],
+            yerr=[[qy[1]-qy[0]], [qy[2]-qy[1]]],
+            color=auto_c_color,
+            marker=auto_c_marker,
+            markersize=7,
+            capsize=2.5, capthick=0.9, elinewidth=0.8,
+            linewidth=0,
+            zorder=5,
+        )
+        auto_handles.append(eb)
+        auto_labels.append(
+            rf'${auto_c_label},\ \bar{{c}} \approx {mean_c:.2f}$'
+        )
+
+    # ── Two side-by-side legends, top-right ───────────────────────────────────
+    # Novel legend (right), then ref legend placed to its left via bbox offset.
+    # We avoid get_window_extent (requires renderer) by using axes-fraction coords.
+    ltitle = legend_title if legend_title is not None else rf'$\theta_{{{legend_key_index}}}$'
+
+    novel_leg_handles = novel_handles + auto_handles
+    novel_leg_labels  = novel_labels  + auto_labels
+
+    leg_novel = ax.legend(
+        handles=novel_leg_handles,
+        labels=novel_leg_labels,
+        title='$' + novel_label + '$' + '\n' + '$' + ltitle + '$',
+        loc='upper right',
+        framealpha=0.85,
+        edgecolor='0.75',
+        handlelength=1.0,
+        borderpad=0.6,
+    )
+    ax.add_artist(leg_novel)
+
+    # Estimate width of novel legend in axes fraction to place ref legend left of it.
+    # 0.30 is a robust default; increase if legend text is long.
+    novel_leg_width_frac = 0.32
+
+    leg_ref = ax.legend(
+        handles=ref_handles,
+        labels=ref_labels,
+        title='$' + ref_label + '$' + '\n' + '$' + ltitle + '$',
+        loc='upper right',
+        framealpha=0.85,
+        edgecolor='0.75',
+        handlelength=1.0,
+        borderpad=0.6,
+        bbox_to_anchor=(1.0 - novel_leg_width_frac, 1.0),
+        bbox_transform=ax.transAxes,
+    )
+
+    # ── Axes styling ──────────────────────────────────────────────────────────
+    ax.set_xlabel(rf'${x_label}$')
+    ax.set_ylabel(rf'${y_label}$')
+
+    ax.tick_params(axis='both', which='major',
+                   direction='in', top=True, right=True, length=4)
+    ax.xaxis.set_minor_locator(AutoMinorLocator())
+    ax.yaxis.set_minor_locator(AutoMinorLocator())
+    ax.tick_params(axis='both', which='minor',
+                   direction='in', top=True, right=True, length=2)
+    ax.spines['top'].set_visible(True)
+    ax.spines['right'].set_visible(True)
+
+    fig.tight_layout()
+
+    # ── Save ─────────────────────────────────────────────────────────────────
+    if out_filename is None:
+        ref_handle   = ref_filename[:-4]
+        novel_handle = novel_filename[:-4]
+        out_filename = f'{ref_handle}_vs_{novel_handle}_pareto.svg'
+
+    plt.savefig(out_filename, dpi=600, format='svg', bbox_inches='tight')
+    plt.close(fig)
+    print(f'Saved: {out_filename}')
