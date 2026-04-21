@@ -1,50 +1,11 @@
 '''
 Experimental Setups
-
-Below are setup functions that take in a list of parameters and configure them to run experiments.
-They follow the ipynb contents relatively closely.
-The parameters are decomposed into two types: hyperparameters and experiment parameters.
-Hyperparameters tell us information like seeding, adaptive threshold quantiles, and number of particles which should stay constant across experiments.
-Experiment parameters are ones that are varied.
-Here, the experimental parameters are basically restricted to heterogeneity perturbations, physical perturbations, and SMC ABC method hyperparameters like minibatch size.
-
-Usage:
-make list of dictionaries for experimental parameters.
-run the function with **dictionary. 
-Should save results to a pickle file. 
-Results: Dictionary with keys of varied parameters and values of the results of the experiment.
-
-
-
-use:
-import...
-parameter_sweep = dict...
-experiment(parameter_sweep)
-
-experiment then handles the sweep over parameters, and the dictionary keys are used to name the output parameters.
-We save a pickled structure from SMC ABC that should probably be like.....
-parameters
-- list of replicates
-  - dictionary of gathered values for each replicate.
-So, we could see something like: a constant smc abc sweep over minibatch sample sizes [[n]]
-to obtain the total time for replicate 1 for the last generation for parameter set [32], we would have
-to obtain total time at the last generation for replicate 1 for parameter set [32],
-results[(32,)][0][-1]['total_time'] # I think it has to be a tuple to work for dicitonaries 
-Then we have data processing functions that do stuff like:
-turn this into a non-uniform matrix of times:
-times[[n]] = matrix(potentially not uniform) of total times across generations
-
-
-Data that we want to track: 
-(generation) 
-total sims
-total time
-alpha threshold
-acceptance rate
-v estimate
-batch size
-
+We have lotka-volterra and transcriptional dynamics.
+We measure data for each generation and pickle it at the end. 
+The outputs are in the format: 
+    Dictionary of keys (parameter sets) values (list of replicates (list of generations (dictionary of information)))
 '''
+
 
 ## Import smc abc class and schemes
 import smc_abc_schemes as schemes
@@ -83,7 +44,6 @@ def lotka_volterra_step(
     sample_size = 128, T = 5, dt = 0.01, #simulation parameters (base)
     alpha = 0.5, num_particles = 500, cores = 4, #estimator parameters
     prior_domain = [[0.0,10.0],[0.0,0.05],[0.0,10.0]],
-    method = 'constant',
     **kwargs
 ):
     a,b,g = list(physical_params)
@@ -111,11 +71,11 @@ def lotka_volterra_step(
 
     #s_data = stats_func_lv(data)
     N_stats = data.shape[1]
-    def model(p, Bi, num_reps=3, seed=None):
+    def model(p, Bi, num_reps=1, seed=None):
         alpha, beta, gamma = p
         s_sim = np.zeros((Bi.shape[0],N_stats))
         rep_rng = np.random.default_rng(seed) if seed is not None else None
-        for _ in range(3):
+        for _ in range(num_reps):
             rep_seed = int(rep_rng.integers(np.iinfo(np.int64).max)) if rep_rng is not None else -1
             _, sim = lv.tau_leaping(ic[Bi], T,alpha, beta, gamma, d, dt=dt, seed=rep_seed)
             s_sim += stats_func_lv(sim)
@@ -144,7 +104,8 @@ def lotka_volterra_step(
         'num_particles':num_particles,
         'cores':cores,
         'alpha':alpha,
-        'seed':seed
+        'seed':seed,
+        'parallel_args':dict(max_nbytes = '100M', timeout=99999)
     }
     stop = default_stop if stop_func is None else stop_func
 
@@ -173,14 +134,14 @@ def batch_corr_single(a, b, eps=1e-8):
     return num / (den + eps)
 
 @njit
-def stats_func_lv(x, max_lag=3, step_size=10):
+def stats_func_lv(x, max_lag=1, step_size=10):
     n_replicates = x.shape[0]
     n_timesteps = x.shape[1]
     eps = 1e-8
     
     # Pre-calculate number of features
     # 1 (ext_ind) + 5 (logs) + 1 (cross-corr) + 2 * max_lag (auto-corrs)
-    num_features = 6 + (2 * max_lag)
+    num_features = 4 + (2 * max_lag)
     out = np.zeros((n_replicates, num_features))
     
     for i in range(n_replicates):
@@ -199,30 +160,23 @@ def stats_func_lv(x, max_lag=3, step_size=10):
         f = f_full[:ext_ind]
         
         # --- 2. Base Moments ---
-        #out[i, 0] = float(ext_ind) #Excluding extinction since this can result in no variance in mahalanobis covariance calculation
         out[i, 0] = batch_corr_single(r, f, eps)
         out[i, 1] = np.log(np.mean(r) + eps)
         out[i, 2] = np.log(np.mean(f) + eps)
         out[i, 3] = np.log(np.var(r) + eps)
-        out[i, 4] = np.log(np.min(r) + eps)
-        out[i, 5] = np.log(np.min(f) + eps)
-        #out[i, 6] = batch_corr_single(r, f, eps)
-        
+
         # --- 3. Autocorrelation Lags ---
-        # Note: If ext_ind < lag, these will be NaNs. 
-        # Usually handled by the ABC or Mahalanobis later.
         for l_idx in range(1, max_lag + 1):
             lag = l_idx * step_size
-            col_r = 6 + (l_idx - 1) * 2
+            col_r = 4 + (l_idx - 1) * 2
             col_f = col_r + 1
             
             if ext_ind > lag:
                 out[i, col_r] = batch_corr_single(r[:-lag], r[lag:], eps)
                 out[i, col_f] = batch_corr_single(f[:-lag], f[lag:], eps)
             else:
-                out[i, col_r] = 0 #np.nan
-                out[i, col_f] = 0 #np.nan
-                
+                out[i, col_r] = 0
+                out[i, col_f] = 0
     return out
 
 
@@ -239,8 +193,7 @@ def transcriptional_dynamics_step(
     stop_func = None,
     sample_size = 512, T = 5, dt = 0.01, #simulation parameters (base)
     alpha = 0.5, num_particles = 500, cores = 4, #estimator parameters
-    prior_domain = [[1,100],[1,100],[0,1.0]],
-    method = 'constant',
+    prior_domain = [[1,100],[1,100],[0,1.0]], stats_per_batch = False,
     **kwargs
 ):
     '''
@@ -285,8 +238,12 @@ def transcriptional_dynamics_step(
 
     ### Prior
     prior = utils.uniform_prior(prior_domain,seed = seed)
+    if stats_per_batch:
+        statsf = stats_func_td_per_batch
+    else:
+        statsf = stats_func_td
 
-    def stats_func(x,y,sf = stats_func_td):
+    def stats_func(x,y,sf = statsf):
         return sf(x),sf(y)
 
     ### Scheme
@@ -308,7 +265,8 @@ def transcriptional_dynamics_step(
         'num_particles':num_particles,
         'cores':cores,
         'alpha':alpha,
-        'seed':seed
+        'seed':seed,
+        'parallel_args':dict(max_nbytes = '100M', timeout=99999)
     }
     stop = default_stop if stop_func is None else stop_func
 
@@ -336,6 +294,26 @@ def stats_func_td(x):
             out[i, 2] = np.std(x[i])
         else:
             out[i, 2] = 0.0
+    return out
+
+@njit
+def stats_func_td_per_batch(x):
+    batch_size = len(x)
+    out = np.zeros((3,))
+    counts = np.zeros((batch_size,))
+    std_list = np.zeros((batch_size,))
+    for i in range(batch_size):
+        counts[i] = len(x[i])
+        if counts[i] >= 2:
+            std_list[i] = np.std(x[i])
+        else:
+            std_list[i] = 0.0
+    mean_count = np.mean(counts)
+    var_count = np.var(counts)
+    mean_std_pos = np.mean(std_list)
+    out[0] = mean_count
+    out[1] = var_count
+    out[2] = mean_std_pos
     return out
 
 
@@ -578,6 +556,117 @@ def save(filename,data):
         pickle.dump(data,f)
 
 
+#### Post-hoc stopping criterion
+def ph_stop(data, stop_func):
+    """
+    Apply a post-hoc stopping criterion to experimental results.
+    
+    This function takes loaded results (from experiments.load) and truncates each replicate's
+    generations based on a user-defined stopping function.
+    
+    Parameters
+    ----------
+    data : dict
+        Nested dict structure: data[param_tuple][replicate_idx][generation_idx][attr_name]
+        Loaded from experiments.load()
+    stop_func : callable
+        A function that takes a generation dictionary (output of get_info) and returns True
+        when the stopping criterion is met. The function should have signature:
+        bool = stop_func(gen_dict)
+        
+        Example:
+        >>> def stop_func(gen_dict):
+        >>>     return (gen_dict['snr'] < 2 and gen_dict['acceptance_rate'] < 0.02)
+    
+    Returns
+    -------
+    data_ph : dict
+        Same structure as input, but with each replicate truncated to stop at the 
+        generation where stop_func first returns True (inclusive of that generation).
+    
+    Usage
+    -----
+    >>> data = experiments.load('results/experiment.pkl')
+    >>> def my_stop(gen_dict):
+    >>>     return gen_dict['acceptance_rate'] < 0.01
+    >>> data_truncated = experiments.ph_stop(data, my_stop)
+    """
+    data_ph = {}
+    
+    for param_key, replicates in data.items():
+        truncated_replicates = []
+        
+        for replicate in replicates:
+            # Apply stopping criterion to this replicate
+            truncated_replicate = []
+            for gen_dict in replicate:
+                truncated_replicate.append(gen_dict)
+                # Stop after including the generation where stop_func returns True
+                if stop_func(gen_dict):
+                    break
+            truncated_replicates.append(truncated_replicate)
+        
+        data_ph[param_key] = truncated_replicates
+    
+    return data_ph
+
+
+def subset(data, keys_to_keep):
+    """
+    Subset experimental results by keeping only specified parameter keys.
+    
+    This function filters a loaded results dictionary to keep only the specified
+    parameter configurations, removing all others.
+    
+    Parameters
+    ----------
+    data : dict
+        Nested dict structure: data[param_tuple][replicate_idx][generation_idx][attr_name]
+        Loaded from experiments.load()
+    keys_to_keep : list
+        List of parameter tuple keys to keep. Examples:
+        - [(32,), (64,), (128,)] if parameters are single values
+        - [(1, 0.01), (1, 0.05)] if parameters are tuples
+        - Can also pass indices (converted to corresponding keys)
+    
+    Returns
+    -------
+    data_subset : dict
+        Same nested structure as input, but containing only the specified parameter keys.
+    
+    Raises
+    ------
+    KeyError
+        If any of the specified keys are not found in the data.
+    
+    Usage
+    -----
+    >>> data = experiments.load('results/experiment.pkl')
+    >>> # Keep only specific parameter configurations
+    >>> data_small = experiments.subset(data, [(32,), (64,), (128,)])
+    >>> # Or keep by index
+    >>> data_small = experiments.subset(data, [0, 2, 3])  # Keep 1st, 3rd, 4th configs
+    """
+    data_subset = {}
+    all_keys = list(data.keys())
+    
+    for key_spec in keys_to_keep:
+        # If integer index, convert to actual key
+        if isinstance(key_spec, int):
+            if key_spec < 0 or key_spec >= len(all_keys):
+                raise IndexError(f"Index {key_spec} out of range for {len(all_keys)} parameter keys")
+            actual_key = all_keys[key_spec]
+        else:
+            actual_key = key_spec
+        
+        if actual_key not in data:
+            raise KeyError(f"Parameter key {actual_key} not found in results. Available keys: {list(data.keys())}")
+        
+        data_subset[actual_key] = data[actual_key]
+    
+    return data_subset
+
+
 ###### Plotting Functions
 '''
 Plotting functions.
@@ -637,13 +726,12 @@ def plot_ts(x_axis,y_axis,fig_ax = None, grid_lines = False, #basics
     return fig,ax
 
 
-
-def noise(res,trunc = True):
-    v_total = get_attr(res,'v_total_est',trunc=trunc)
-    n = get_attr(res,'batch_size',trunc=trunc)
+def noise(res,trunc,slice):
+    v_total = get_attr(res,'v_total_est',trunc=trunc,slice=slice)
+    n = get_attr(res,'batch_size',trunc=trunc,slice=slice)
     output = {}
     for k in res.keys():
-        output[k] = v_total[k] / n[k]
+        output[k] = np.array(v_total[k]) / np.array(n[k])
     return output
 noise.__name__ = 'noise'
 
@@ -651,7 +739,7 @@ def time_series(
     results_filename,
     attr_list=[
         'total_time', 'total_sims', 'log_hdpr_product', 'acceptance_rate',
-        'v_total_est', 'alpha_threshold', 'snr', 'batch_size', 'ESS'
+        'v_total_est', 'alpha_threshold', 'snr', 'batch_size', 'ESS', 'noise'
     ],
     attr_ylabels=[
         r'\mathrm{Wall\ Time\ (s)}',
@@ -663,15 +751,18 @@ def time_series(
         r'\mathrm{SNR} = \epsilon_t^2 / (v_t / n)',
         r'\mathrm{Batch\ Size}\ (n)',
         r'\mathrm{ESS}',
+        r'\mathrm{Noise\ Variance}\ (v_t / n)'
     ],
     attr_transform=[
-        'id','id','id','id','id','id','id','id','id'
+        'id','id','id','id','id','id','id','id','id','id'
     ],
     legend_key_index=0,
     legend_title=None,        # e.g. r'\alpha' — defaults to \theta_{i}
-    errorbar_cmap='viridis',
+    errorbar_cmap='winter',
     quantiles=[0.25, 0.5, 0.75],
-    out_path = None,
+    trunc = True, slice = None,
+    out_handle = None,
+    post_hoc_stop = None,
     plot_args={},
 ):
     """
@@ -722,8 +813,9 @@ def time_series(
         'errorbar.capsize': 2.5,
     })
 
-    handle = results_filename[:-4]
     results = load(results_filename)
+    if post_hoc_stop is not None: 
+        results = ph_stop(results, post_hoc_stop)
 
     transforms = {
         'id':  lambda x: x,
@@ -742,31 +834,53 @@ def time_series(
     )
 
     for attr, ylab, transform_name in zip(attr_list, attr_ylabels, attr_transform):
-
         f      = transforms[transform_name]
         tylab  = ylabel_prefixes[transform_name]
 
         # Apply transform before quantile computation (statistically correct)
         # raw         = get_attr(results, attr, trunc=True)
         # Inside the attr loop, replace the raw = get_attr(...) line:
-        if callable(attr):
-            #raw = get_derived(results, attr, trunc=True)
-            raw = attr(results)
-            attr_name = attr.__name__  # use for filename; name your lambdas accordingly
+        if attr == 'noise':
+            raw = noise(results, trunc=trunc, slice=slice)
         else:
-            raw = get_attr(results, attr, trunc=True)
-            attr_name = attr
+            raw = get_attr(results, attr, trunc=trunc, slice=slice)
+
         transformed = {k: f(np.array(v, dtype=float)) for k, v in raw.items()}
         res_attr    = get_quantiles(transformed, q=quantiles)
 
-        keys   = list(res_attr.keys())
-        n_keys = len(keys)
-        colors = [cmap(i / max(n_keys - 1, 1)) for i in range(n_keys)]
+        # ── Partition keys: sweep vs auto-c ───────────────────────────────────
+        def _is_auto(k):
+            return k[legend_key_index] is None
+
+        sweep_keys = [k for k in res_attr.keys() if not _is_auto(k)]
+        auto_keys  = [k for k in res_attr.keys() if     _is_auto(k)]
+
+        # ── Estimate mean c for auto keys (from raw results, attr 'c') ────────
+        def calc_mean_c(results):
+            """Average c across all replicates and generations."""
+            if not auto_keys:
+                return {}
+            outputs = {}
+            try:
+                c_list = get_attr(results, 'c', trunc=False, slice=-1)
+                for k in auto_keys:
+                    outputs[k] = np.mean(c_list[k]) if k in c_list else float('nan')
+            except:
+                for k in auto_keys:
+                    outputs[k] = float('nan')
+            return outputs
+
+        auto_c_estimates = calc_mean_c(results)
+
+        # ── Colors for sweep points ───────────────────────────────────────────
+        n_sweep = len(sweep_keys)
+        sweep_colors = [cmap(i / max(n_sweep - 1, 1)) for i in range(n_sweep)]
 
         # ── Figure ────────────────────────────────────────────────────────────
         fig, ax = plt.subplots(figsize=(5, 3.5))
 
-        for color, k in zip(colors, keys):
+        # Plot sweep keys
+        for color, k in zip(sweep_colors, sweep_keys):
             q_arr = res_attr[k]          # (3, T)
             T     = q_arr.shape[1]
             gens  = np.arange(T)
@@ -791,6 +905,34 @@ def time_series(
                 capsize=2.5,
                 capthick=0.9,
                 elinewidth=0.7,
+                **plot_args,
+            )
+
+        # Plot auto-c keys (magenta star marker, labelled with estimated c)
+        for k in auto_keys:
+            q_arr = res_attr[k]          # (3, T)
+            T     = q_arr.shape[1]
+            gens  = np.arange(T)
+
+            med   = q_arr[1, :]
+            lower = q_arr[1, :] - q_arr[0, :]   # median − q_low  (positive)
+            upper = q_arr[2, :] - q_arr[1, :]   # q_high − median (positive)
+
+            mean_c = auto_c_estimates[k]
+            label = rf'$\mathrm{{auto}},\ \bar{{c}} \approx {mean_c:.2f}$'
+
+            ax.errorbar(
+                gens, med,
+                yerr=np.stack([lower, upper], axis=0),
+                color='magenta',
+                marker='*',
+                markersize=7,
+                label=label,
+                linewidth=1.4,
+                capsize=2.5,
+                capthick=0.9,
+                elinewidth=0.7,
+                zorder=5,
                 **plot_args,
             )
 
@@ -825,11 +967,16 @@ def time_series(
         )
 
         fig.tight_layout()
-        if out_path is None:
+        if out_handle is None:
+            handle = 'results/output'
             out_path = f'{handle}_{attr}.svg'
+        else:
+            out_path = f'{out_handle}_{attr}.svg'
         plt.savefig(out_path, dpi=600, format='svg', bbox_inches='tight')
         plt.close(fig)
         print(f'Saved: {out_path}')
+
+
 
 # To do: Change the marker of one of them.
 # To do: fix output filename default 
@@ -842,10 +989,10 @@ def pareto_frontier(
     y_label=r'\log\!\left(\prod_i \ell_i\right)',
     x_transform='id',
     y_transform='id',
-    ref_label=r'\mathrm{Constant\ SMC\ ABC}',
-    novel_label=r'\mathrm{Adaptive\ SMC\ ABC}',
-    ref_cmap='Oranges',
-    novel_cmap='Blues',
+    ref_label=r'\mathrm{Constant}',
+    novel_label=r'\mathrm{Adaptive}',
+    ref_cmap='autumn',
+    novel_cmap='winter',
     legend_key_index_ref=0,
     legend_key_index=0,
     legend_title=None,
@@ -854,6 +1001,7 @@ def pareto_frontier(
     auto_c_label=r'\mathrm{auto}',
     plot_args={},
     out_filename=None,
+    post_hoc_stop = None
 ):
     """
     Plot Pareto frontiers comparing constant minibatch SMC-ABC (reference)
@@ -941,6 +1089,9 @@ def pareto_frontier(
     # ── Load ──────────────────────────────────────────────────────────────────
     ref_results   = load(ref_filename)
     novel_results = load(novel_filename)
+    if post_hoc_stop is not None:
+        ref_results   = ph_stop(ref_results, post_hoc_stop)
+        novel_results = ph_stop(novel_results, post_hoc_stop)
 
     def _extract(results, attr, f):
         """Last-gen value per replicate, no truncation, then transform."""
@@ -1074,43 +1225,53 @@ def pareto_frontier(
             rf'${auto_c_label},\ \bar{{c}} \approx {mean_c:.2f}$'
         )
 
-    # ── Two side-by-side legends, top-right ───────────────────────────────────
-    # Novel legend (right), then ref legend placed to its left via bbox offset.
-    # We avoid get_window_extent (requires renderer) by using axes-fraction coords.
-    ltitle = legend_title if legend_title is not None else rf'$\theta_{{{legend_key_index}}}$'
 
+
+    # # ── Two side-by-side legends, top-right ───────────────────────────────────
+    # # Novel legend (right), then ref legend placed to its left via bbox offset.
+    # # We avoid get_window_extent (requires renderer) by using axes-fraction coords.
+    ltitle = legend_title if legend_title is not None else rf'$\theta_{{{legend_key_index}}}$'
     novel_leg_handles = novel_handles + auto_handles
     novel_leg_labels  = novel_labels  + auto_labels
 
+    # 1. Create the Novel Legend (anchored to top-right)
     leg_novel = ax.legend(
         handles=novel_leg_handles,
         labels=novel_leg_labels,
         title='$' + novel_label + '$' + '\n' + '$' + ltitle + '$',
+        alignment='center',
         loc='upper right',
         framealpha=0.85,
         edgecolor='0.75',
         handlelength=1.0,
         borderpad=0.6,
     )
+    leg_novel.get_title().set_multialignment('center')
     ax.add_artist(leg_novel)
 
-    # Estimate width of novel legend in axes fraction to place ref legend left of it.
-    # 0.30 is a robust default; increase if legend text is long.
-    novel_leg_width_frac = 0.32
+    # 2. Force a draw to calculate the legend size
+    fig.canvas.draw()
 
+    # 3. Get the LEFT edge of the novel legend in axes coordinates
+    inv = ax.transAxes.inverted()
+    bbox_novel = leg_novel.get_window_extent().transformed(inv)
+    left_edge = bbox_novel.x0  # x0 is the left boundary
+
+    # 4. Create the Ref Legend, anchored to the left_edge of leg_novel
     leg_ref = ax.legend(
         handles=ref_handles,
         labels=ref_labels,
-        title='$' + ref_label + '$' + '\n' + '$' + ltitle + '$',
-        loc='upper right',
+        title='$' + ref_label + '$' + '\n' + '$\mathrm{Batch Size}$',
+        alignment='center',
+        loc='upper right',  # Keep 'upper right' so its right edge touches the anchor
         framealpha=0.85,
         edgecolor='0.75',
         handlelength=1.0,
         borderpad=0.6,
-        bbox_to_anchor=(1.0 - novel_leg_width_frac, 1.0),
+        bbox_to_anchor=(left_edge - 0.01, 1.0), # Subtract a small gap (0.01)
         bbox_transform=ax.transAxes,
     )
-
+    leg_ref.get_title().set_multialignment('center')
     # ── Axes styling ──────────────────────────────────────────────────────────
     ax.set_xlabel(rf'${x_label}$')
     ax.set_ylabel(rf'${y_label}$')
@@ -1131,6 +1292,295 @@ def pareto_frontier(
         ref_handle   = ref_filename[:-4]
         novel_handle = novel_filename[:-4]
         out_filename = f'{ref_handle}_vs_{novel_handle}_pareto.svg'
+
+    plt.savefig(out_filename, dpi=600, format='svg', bbox_inches='tight')
+    plt.close(fig)
+    print(f'Saved: {out_filename}')
+
+
+def pareto_frontier_scatter(
+    ref_filename,
+    novel_filename,
+    x_attr='total_time',
+    y_attr='log_hdpr_product',
+    x_label=r'\mathrm{Wall\ Time\ (s)}',
+    y_label=r'\log\!\left(\prod_i \ell_i\right)',
+    x_transform='id',
+    y_transform='id',
+    ref_label=r'\mathrm{Constant}',
+    novel_label=r'\mathrm{Adaptive}',
+    ref_cmap='autumn',
+    novel_cmap='winter',
+    legend_key_index_ref=0,
+    legend_key_index=0,
+    legend_title=None,
+    auto_c_color='magenta',
+    auto_c_marker='*',
+    auto_c_label=r'\mathrm{auto}',
+    markersize=6,
+    alpha_scatter=0.6,
+    out_filename=None,
+    post_hoc_stop=None
+):
+    """
+    Scatter plot version of pareto frontier comparing reference vs novel methods.
+    
+    Instead of plotting quantile error bars, plots every replicate as a scatter point,
+    colored by parameter sweep. Reference and novel methods are shown separately
+    with different colormaps.
+
+    Parameters
+    ----------
+    ref_filename : str
+        Path to reference (constant minibatch) .pkl results file.
+    novel_filename : str
+        Path to novel (adaptive) .pkl results file.
+    x_attr : str
+        Cost metric (e.g., 'total_time').
+    y_attr : str
+        Accuracy metric (e.g., 'log_hdpr_product').
+    x_label : str
+        Raw LaTeX string for x-axis label.
+    y_label : str
+        Raw LaTeX string for y-axis label.
+    x_transform : {'id', 'log'}
+        Transform applied to x values.
+    y_transform : {'id', 'log'}
+        Transform applied to y values.
+    ref_label : str
+        LaTeX display name for reference method.
+    novel_label : str
+        LaTeX display name for novel method.
+    ref_cmap : str or Colormap
+        Colormap for reference scatter points.
+    novel_cmap : str or Colormap
+        Colormap for novel scatter points.
+    legend_key_index_ref : int
+        Index into param tuple for reference legend.
+    legend_key_index : int
+        Index into param tuple for novel legend.
+    legend_title : str or None
+        Shared sweep-parameter label.
+    auto_c_color : str
+        Color for auto-c points.
+    auto_c_marker : str
+        Marker for auto-c points.
+    auto_c_label : str
+        Label for auto-c in legend.
+    markersize : int
+        Size of scatter points.
+    alpha_scatter : float
+        Transparency of scatter points (0-1).
+    out_filename : str or None
+        Output SVG path.
+    post_hoc_stop : callable or None
+        Post-hoc stopping function to apply.
+    """
+
+    plt.rcParams.update({
+        'text.usetex': True,
+        'font.family': 'serif',
+        'font.serif': ['Computer Modern Roman'],
+        'axes.labelsize': 11,
+        'axes.titlesize': 11,
+        'xtick.labelsize': 9,
+        'ytick.labelsize': 9,
+        'legend.fontsize': 8,
+        'legend.title_fontsize': 9,
+        'figure.dpi': 150,
+        'savefig.dpi': 600,
+        'lines.linewidth': 1.4,
+    })
+
+    transforms = {'id': lambda x: x, 'log': np.log}
+    fx = transforms[x_transform]
+    fy = transforms[y_transform]
+
+    def _resolve_cmap(c):
+        return plt.get_cmap(c) if isinstance(c, str) else c
+
+    ref_cmap_fn = _resolve_cmap(ref_cmap)
+    novel_cmap_fn = _resolve_cmap(novel_cmap)
+
+    # ── Load ──────────────────────────────────────────────────────────────────
+    ref_results = load(ref_filename)
+    novel_results = load(novel_filename)
+    if post_hoc_stop is not None:
+        ref_results = ph_stop(ref_results, post_hoc_stop)
+        novel_results = ph_stop(novel_results, post_hoc_stop)
+
+    def _extract_all_replicates(results, attr, f):
+        """
+        Extract all replicate values at last generation.
+        Returns dict: param_key -> list of values (one per replicate).
+        """
+        raw = get_attr(results, attr, trunc=False, slice=-1)
+        return {k: f(np.array(v, dtype=float)) for k, v in raw.items()}
+
+    ref_x = _extract_all_replicates(ref_results, x_attr, fx)
+    ref_y = _extract_all_replicates(ref_results, y_attr, fy)
+    novel_x = _extract_all_replicates(novel_results, x_attr, fx)
+    novel_y = _extract_all_replicates(novel_results, y_attr, fy)
+
+    # ── Partition novel keys: sweep vs auto-c ─────────────────────────────────
+    def _is_auto(k):
+        return k[legend_key_index] is None
+
+    novel_sweep_keys = [k for k in novel_x.keys() if not _is_auto(k)]
+    novel_auto_keys = [k for k in novel_x.keys() if _is_auto(k)]
+
+    # ── Calculate mean c for auto keys ────────────────────────────────────────
+    def check_c(results):
+        '''If c is in first result, returns True.'''
+        keys = [k for k in results.keys()]
+        if 'c' in results[keys[0]][0][0]:
+            return True
+        else:
+            return False
+
+    def calc_mean_c(results):
+        if check_c(results):
+            c_list = get_attr(results, 'c', trunc=False, slice=-1)
+            outputs = {}
+            for k in results.keys():
+                outputs[k] = np.mean(c_list[k])
+        else:
+            outputs = {}
+            for k in results.keys():
+                outputs[k] = np.nan
+        return outputs
+
+    auto_c_estimates = calc_mean_c(novel_results)
+
+    # ── Colors for parameter sweep ────────────────────────────────────────────
+    def _colors(cmap_fn, n, lo=0.35, hi=0.90):
+        return [cmap_fn(lo + (hi - lo) * i / max(n - 1, 1)) for i in range(n)]
+
+    ref_colors = _colors(ref_cmap_fn, len(ref_x))
+    novel_sweep_colors = _colors(novel_cmap_fn, len(novel_sweep_keys))
+
+    # ── Figure ────────────────────────────────────────────────────────────────
+    fig, ax = plt.subplots(figsize=(5.5, 4.0))
+
+    def _label_val(val):
+        if isinstance(val, float) and abs(val) < 0.01:
+            return rf'${val:.2e}$'
+        return rf'${val}$'
+
+    # ── Reference sweep: scatter all replicates ───────────────────────────────
+    ref_handles, ref_labels = [], []
+    for color, k in zip(ref_colors, ref_x.keys()):
+        x_vals = ref_x[k]
+        y_vals = ref_y[k]
+        scatter = ax.scatter(
+            x_vals, y_vals,
+            color=color,
+            s=markersize**2,
+            alpha=alpha_scatter,
+            edgecolors='none',
+        )
+        ref_handles.append(scatter)
+        ref_labels.append(_label_val(k[legend_key_index_ref]))
+
+    # ── Novel sweep: scatter all replicates ───────────────────────────────────
+    novel_handles, novel_labels = [], []
+    for color, k in zip(novel_sweep_colors, novel_sweep_keys):
+        x_vals = novel_x[k]
+        y_vals = novel_y[k]
+        scatter = ax.scatter(
+            x_vals, y_vals,
+            color=color,
+            s=markersize**2,
+            alpha=alpha_scatter,
+            edgecolors='none',
+        )
+        novel_handles.append(scatter)
+        novel_labels.append(_label_val(k[legend_key_index]))
+
+    # ── Auto-c points (magenta star, one point per auto key) ──────────────────
+    auto_handles, auto_labels = [], []
+    for k in novel_auto_keys:
+        x_vals = novel_x[k]
+        y_vals = novel_y[k]
+        mean_c = auto_c_estimates[k]
+        scatter = ax.scatter(
+            x_vals, y_vals,
+            color=auto_c_color,
+            marker=auto_c_marker,
+            s=markersize**2 * 2,  # Make auto-c points slightly bigger
+            alpha=alpha_scatter,
+            edgecolors='none',
+            zorder=5,
+        )
+        auto_handles.append(scatter)
+        auto_labels.append(
+            rf'${auto_c_label},\ \bar{{c}} \approx {mean_c:.2f}$'
+        )
+
+    # ── Legends: side-by-side at top-right ────────────────────────────────────
+    ltitle = legend_title if legend_title is not None else rf'$\theta_{{{legend_key_index}}}$'
+    novel_leg_handles = novel_handles + auto_handles
+    novel_leg_labels = novel_labels + auto_labels
+
+    # Novel legend (right)
+    leg_novel = ax.legend(
+        handles=novel_leg_handles,
+        labels=novel_leg_labels,
+        title='$' + novel_label + '$' + '\n' + '$' + ltitle + '$',
+        alignment='center',
+        loc='upper right',
+        framealpha=0.85,
+        edgecolor='0.75',
+        handlelength=1.0,
+        borderpad=0.6,
+        scatterpoints=1,
+    )
+    ax.add_artist(leg_novel)
+
+    # Force draw to get legend dimensions
+    fig.canvas.draw()
+
+    # Get left edge of novel legend
+    inv = ax.transAxes.inverted()
+    bbox_novel = leg_novel.get_window_extent().transformed(inv)
+    left_edge = bbox_novel.x0
+
+    # Reference legend (left of novel legend)
+    leg_ref = ax.legend(
+        handles=ref_handles,
+        labels=ref_labels,
+        title='$' + ref_label + '$' + '\n' + '$' + ltitle + '$',
+        alignment='center',
+        loc='upper right',
+        framealpha=0.85,
+        edgecolor='0.75',
+        handlelength=1.0,
+        borderpad=0.6,
+        bbox_to_anchor=(left_edge - 0.01, 1.0),
+        bbox_transform=ax.transAxes,
+        scatterpoints=1,
+    )
+
+    # ── Axes styling ──────────────────────────────────────────────────────────
+    ax.set_xlabel(rf'${x_label}$')
+    ax.set_ylabel(rf'${y_label}$')
+
+    ax.tick_params(axis='both', which='major',
+                   direction='in', top=True, right=True, length=4)
+    ax.xaxis.set_minor_locator(AutoMinorLocator())
+    ax.yaxis.set_minor_locator(AutoMinorLocator())
+    ax.tick_params(axis='both', which='minor',
+                   direction='in', top=True, right=True, length=2)
+    ax.spines['top'].set_visible(True)
+    ax.spines['right'].set_visible(True)
+
+    fig.tight_layout()
+
+    # ── Save ─────────────────────────────────────────────────────────────────
+    if out_filename is None:
+        ref_handle = ref_filename[:-4]
+        novel_handle = novel_filename[:-4]
+        out_filename = f'{ref_handle}_vs_{novel_handle}_pareto_scatter.svg'
 
     plt.savefig(out_filename, dpi=600, format='svg', bbox_inches='tight')
     plt.close(fig)
