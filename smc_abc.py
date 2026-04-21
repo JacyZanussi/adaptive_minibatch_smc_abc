@@ -35,7 +35,7 @@ class smc_abc_iterator:
 
     def __init__(self,data,model,stats_func,prior,dist_func='mahalanobis',mweight_mat = None,num_particles=1000,alpha=0.5,ess_prop = 0.5, seed = None,
                 sample_size = np.inf,batch_size=np.inf,batch_size_min=2,batch_size_max=np.inf,num_reps=1,sample_with_replacement=True, print_output = True,
-                cores=-1,parallel_batch_size='auto',backend='loky', rcond = 1e-15, epsilon = 1e-6, low_mem = False):
+                cores=-1,parallel_batch_size='auto',parallel_args = {}, rcond = 1e-15, epsilon = 1e-6, low_mem = False):
         self.data = data
         self.model = model
         self.stats_func = stats_func
@@ -70,13 +70,6 @@ class smc_abc_iterator:
                 batch = self._main_rng.choice(self.sample_size,size)
                 data_batched = data[batch] if type(data) == np.ndarray else [data[i] for i in batch]
                 _,stats_obs = stats_func(data_batched,data_batched)
-                #Take per-sample summary statistics of shape (sample_size,N_s), compute covariance.
-                # if stats_obs.ndim > 1:
-                #     stds = np.std(stats_obs, axis = 0, ddof=1)
-                #     stds[stds == 0] = 1.0
-                #     stats_scaled = stats_obs / stds
-                #     shrunk_corr,_ = ledoit_wolf(stats_scaled)
-                #     cov = np.outer(stds, stds) * shrunk_corr
                 if stats_obs.ndim <= 1:
                     # NOTE: this is defunct. It turns out you can't easily bootstrap summary covariances per batch per particle (N_boot by N_particles)
                     # Per-batch summary: bootstrap to estimate covariance
@@ -116,21 +109,21 @@ class smc_abc_iterator:
             def estimate_v_total(est):
                 observed_stats_repeated = np.repeat(est.posterior_stats_ref, repeats = est.reps, axis=1)
                 delta = est.posterior_stats - observed_stats_repeated
-                if delta.ndim <= 2: 
+                if delta.ndim <= 2:
                     # NOTE: Critical flaw here. We can't bootstrap covariances of batches here, and this is covariance over particles, not observations.
+                    # Update 4/19/2026: We will use what we had last time, though this might be technically wrong....
                     # This would be covariance of (N_particles, N_stats), which would give us covariance of stats across particles
-                    #Sigma = np.cov(delta.T)
-                    pass
+                    Sigma = np.cov(delta.T)/est.batch_size
                 else: #The dimensions are (N particles by N_bs batch size by N_s stats)
-                    cov_list = np.array([np.cov(x.T) for x in delta]) #(N by N_s by N_s)
-                    Sigma = np.mean(cov_list,axis=0)
-                    delta_reshaped = delta.reshape(self.num_particles, self.batch_size, self.reps, delta.shape[-1]) #Handles replicates
+                    #cov_list = np.array([np.cov(x.T) for x in delta]) #(N by N_s by N_s)
+                    #Sigma = np.mean(cov_list,axis=0)
+                    delta_reshaped = delta.reshape(est.num_particles, est.batch_size, est.reps, delta.shape[-1]) #Handles replicates
                     batch_means = np.mean(delta_reshaped, axis=2)
                     batch_centers = batch_means.mean(axis=1, keepdims=True)
                     diff = batch_means - batch_centers
-                    Sigma = np.einsum('ijk,ijl->kl', diff, diff)/(self.num_particles * (self.batch_size - 1))
-                self.Sigma = Sigma
-                self.v_total_est = self.esv(Sigma)
+                    Sigma = np.einsum('ijk,ijl->kl', diff, diff)/(est.num_particles * (est.batch_size - 1))
+                est.Sigma = Sigma
+                est.v_total_est = est.esv(Sigma)
             self.estimate_v_total = estimate_v_total
         else:
             if callable:
@@ -149,8 +142,6 @@ class smc_abc_iterator:
 
         ## Parallelization parameters
         self.cores = cores
-        self.backend = backend
-        self.parallel_batch_size = parallel_batch_size
         self.epsilon = epsilon
         
         ## Auxiliary or updated per generation
@@ -171,6 +162,7 @@ class smc_abc_iterator:
         self.dtype = np.float32 if low_mem else np.float64
         # warm up njit
         self.stats_func(*self.model(prior[0](),np.arange(self.sample_size)))
+        self.parallel_args = parallel_args
 
 
     ###### Step 1: Generation Step - Samples from the proposal distribution, simulates, and accepts particles. Updates internal data to reflect this.
@@ -218,8 +210,8 @@ class smc_abc_iterator:
         batch_matrix = np.empty((self.accepted_per_generation,self.__batch_size_round__),dtype=int)
         num_sims = 0
         del s, rind
-        for p,params,sim_stats, dist, bi, ns in Parallel(n_jobs=self.cores,prefer='processes', temp_folder=None,
-                     batch_size=self.parallel_batch_size,backend=self.backend,return_as = 'generator')(
+        for p,params,sim_stats, dist, bi, ns in Parallel(n_jobs=self.cores,prefer='processes', temp_folder=os.environ.get('JOBLIB_TEMP_FOLDER'),
+                     batch_size='auto',backend='loky',return_as = 'generator',**self.parallel_args)(
             delayed(parloop_partial)(p,seed = child_seeds[p]) for p in range(self.accepted_per_generation)
             ):
             thetas[p] = params
@@ -458,7 +450,7 @@ class smc_abc_iterator:
 def parloop(p,batch_size,sample_size,generation,sample_func,prior,model,stats_func,dist_func,threshold,replace,resample_batch_size,seed):
     #Seeding
     global_int = int(seed.generate_state(1)[0])
-    np.random.seed(global_int)
+    #np.random.seed(global_int)
     rng = np.random.default_rng(global_int)
 
     num_sims = 0
