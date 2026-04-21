@@ -1,15 +1,15 @@
 #!/bin/bash
 #SBATCH -p free
 #SBATCH --constraint=avx512
-#SBATCH --job-name=hps
-#SBATCH --error=slurm_logs/error_hps_%a.txt
-#SBATCH --output=slurm_logs/out_hps_%a.txt
+#SBATCH --job-name=kilic
+#SBATCH --error=slurm_logs/error_kilic_%a.txt
+#SBATCH --output=slurm_logs/out_kilic_%a.txt
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=4
 #SBATCH --mem-per-cpu=4G  # Ensure you have enough RAM
-#SBATCH --time=24:00:00
-#SBATCH --array=10-13
+#SBATCH --time=3:00:00
+#SBATCH --array=0-1
 
 # 1. Setup Local Scratch (This is the "consistency" magic)
 # UCI HPC3 clears this automatically after the job finishes
@@ -29,7 +29,6 @@ export OMP_NUM_THREADS=$SLURM_CPUS_PER_TASK
 # We stay in the DIR so Python can find your modules,
 # but Joblib will use LOCAL_SCRATCH for its heavy I/O.
 DIR='/dfs6b/pub/jzanussi/adaptive_minibatch_smc_abc'
-OUT_DIR="$DIR/results/"
 cd "$DIR"
 
-python -u experiment_hyperparameters.py "$SLURM_ARRAY_TASK_ID" "$OUT_DIR"
+python -u application_kilic.py "$SLURM_ARRAY_TASK_ID"
