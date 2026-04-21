@@ -8,27 +8,6 @@ import numpy as np
 def constant_init(init_params,p=[1]):
     est = abc_iter(**init_params)
     est.batch_size = p[0]
-    # est.esv = lambda S: np.linalg.trace(est.W_inv @ S)
-    # est.v_total_est = np.inf
-    # est.init_sigma = est.esv(est.W_inv)
-    # def estimate_v_total(est):
-    #     observed_stats_repeated = np.repeat(est.posterior_stats_ref, repeats = est.reps, axis=1)
-    #     delta = est.posterior_stats - observed_stats_repeated
-    #     if delta.ndim <= 2: 
-    #         # NOTE: Critical flaw here. We can't bootstrap covariances of batches here, and this is covariance over particles, not observations.
-    #         #Sigma = np.cov(delta.T)
-    #         pass
-    #     else: #The dimensions are (N particles by N_bs batch size by N_s stats)
-    #         cov_list = np.array([np.cov(x.T) for x in delta]) #(N by N_s by N_s)
-    #         Sigma = np.mean(cov_list,axis=0)
-    #         delta_reshaped = delta.reshape(est.num_particles, est.batch_size, est.reps, delta.shape[-1]) #Handles replicates
-    #         batch_means = np.mean(delta_reshaped, axis=2)
-    #         batch_centers = batch_means.mean(axis=1, keepdims=True)
-    #         diff = batch_means - batch_centers
-    #         Sigma = np.einsum('ijk,ijl->kl', diff, diff)/(est.num_particles * (est.batch_size - 1))
-    #     est.Sigma = Sigma
-    #     est.v_total_est = est.esv(Sigma)
-    # est.estimate_v_total = estimate_v_total
     est.snr = np.inf
     return est
 def constant_loop(est,ess_resample=True,ess_prop = 0.5):
