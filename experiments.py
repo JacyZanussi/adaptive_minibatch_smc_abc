@@ -14,6 +14,7 @@ import smc_abc_utils as utils
 import numpy as np
 import pickle
 import time
+import gc
 from itertools import product
 
 from numba import njit
@@ -666,6 +667,13 @@ def subset(data, keys_to_keep):
     
     return data_subset
 
+#wrapper that combines several dictionaries
+def combine(*dicts):
+    results = {}
+    for d in dicts:
+        results |= d
+    return results
+
 
 ###### Plotting Functions
 '''
@@ -680,6 +688,34 @@ These helper plotting functions are then stitched together to create a full figu
 Helper plotting functions: 
 Plot a Time series (x,y)
 '''
+
+# ── LaTeX + font setup ────────────────────────────────────────────────────
+plt.rcParams.update({
+    'text.usetex': False,
+    'font.family': 'serif',
+    'font.serif': ['CMU Serif'],
+    'mathtext.fontset': 'stix',
+    'mathtext.rm': 'CMU Serif',
+    'pdf.fonttype': 42,
+    'ps.fonttype': 42,
+    'axes.labelsize': 16,
+    'axes.titlesize': 12,
+    'xtick.labelsize': 14,
+    'ytick.labelsize': 14,
+    'legend.fontsize': 11,
+    'legend.title_fontsize': 12,
+    'figure.dpi': 600,
+    'savefig.dpi': 600,
+    'lines.linewidth': 1.6,
+    'lines.markersize': 8,
+    'errorbar.capsize': 2.5,
+    'svg.fonttype' : 'none',
+    'svg.hashsalt' : '42'
+})
+
+
+
+
 def plot_ts(x_axis,y_axis,fig_ax = None, grid_lines = False, #basics
             errorbar_params = {'linewidth':1}, errorbar_cmap = None, #dictionary of params for plt.errorbar
             grid_line_params = {'color':'gray','linewidth':1,'alpha':0.5} #dictionary of params for grid lines
@@ -744,7 +780,7 @@ def time_series(
     attr_ylabels=[
         r'\mathrm{Wall\ Time\ (s)}',
         r'\mathrm{Simulations}',
-        r'\log\!\left(\prod_i \ell_i\right)',
+        r'\prod_i \ell_i',
         r'\mathrm{Acceptance\ Rate}',
         r'v_t',
         r'\epsilon_t',
@@ -758,7 +794,7 @@ def time_series(
     ],
     legend_key_index=0,
     legend_title=None,        # e.g. r'\alpha' — defaults to \theta_{i}
-    errorbar_cmap='winter',
+    errorbar_cmap='GnBu',
     quantiles=[0.25, 0.5, 0.75],
     trunc = True, slice = None,
     out_handle = None,
@@ -796,34 +832,14 @@ def time_series(
     from matplotlib.ticker import AutoMinorLocator
     import numpy as np
 
-    # ── LaTeX + font setup ────────────────────────────────────────────────────
-    plt.rcParams.update({
-        'text.usetex': True,
-        'font.family': 'serif',
-        'font.serif': ['Computer Modern Roman'],
-        'axes.labelsize': 11,
-        'axes.titlesize': 11,
-        'xtick.labelsize': 9,
-        'ytick.labelsize': 9,
-        'legend.fontsize': 8,
-        'legend.title_fontsize': 9,
-        'figure.dpi': 150,
-        'savefig.dpi': 600,
-        'lines.linewidth': 1.4,
-        'errorbar.capsize': 2.5,
-    })
 
     results = load(results_filename)
     if post_hoc_stop is not None: 
         results = ph_stop(results, post_hoc_stop)
 
-    transforms = {
-        'id':  lambda x: x,
-        'log': lambda x: np.log(x),
-    }
     ylabel_prefixes = {
         'id':  '',
-        'log': r'\ln\,',
+        'log': r'\log\,',
     }
 
     # ── Resolve colormap ──────────────────────────────────────────────────────
@@ -833,8 +849,11 @@ def time_series(
         else errorbar_cmap
     )
 
+
     for attr, ylab, transform_name in zip(attr_list, attr_ylabels, attr_transform):
-        f      = transforms[transform_name]
+        f = lambda x: x
+        if attr == 'log_hdpr_product':
+            f = lambda x: np.exp(x) #I natural log transformed it in the smc abc class. This undoes that.
         tylab  = ylabel_prefixes[transform_name]
 
         # Apply transform before quantile computation (statistically correct)
@@ -871,13 +890,27 @@ def time_series(
             return outputs
 
         auto_c_estimates = calc_mean_c(results)
+        #Done with the file. clearing memory
+        # del results
+        # gc.collect()
 
         # ── Colors for sweep points ───────────────────────────────────────────
         n_sweep = len(sweep_keys)
-        sweep_colors = [cmap(i / max(n_sweep - 1, 1)) for i in range(n_sweep)]
+        #sweep_colors = [cmap(i / max(n_sweep - 1, 1)) for i in range(n_sweep)]
+        def _colors(cmap_fn, n, lo=0.35, hi=0.90):
+            return [cmap_fn(lo + (hi - lo) * i / max(n - 1, 1)) for i in range(n)]
+        def _resolve_cmap(c):
+            return plt.get_cmap(c) if isinstance(c, str) else c
+        cmap_fn = _resolve_cmap(errorbar_cmap)
+        sweep_colors = _colors(cmap_fn,n_sweep)
 
         # ── Figure ────────────────────────────────────────────────────────────
         fig, ax = plt.subplots(figsize=(5, 3.5))
+        if transform_name == 'log':
+            ax.set_yscale('log')
+        
+        # Track all y-values to set tight axis limits later
+        all_y_vals = []
 
         # Plot sweep keys
         for color, k in zip(sweep_colors, sweep_keys):
@@ -888,6 +921,10 @@ def time_series(
             med   = q_arr[1, :]
             lower = q_arr[1, :] - q_arr[0, :]   # median − q_low  (positive)
             upper = q_arr[2, :] - q_arr[1, :]   # q_high − median (positive)
+            
+            # Collect y values (including error bar extremes)
+            all_y_vals.extend(med - lower)
+            all_y_vals.extend(med + upper)
 
             legend_val = k[legend_key_index]
             # Format: integers cleanly, floats in scientific if small
@@ -917,9 +954,13 @@ def time_series(
             med   = q_arr[1, :]
             lower = q_arr[1, :] - q_arr[0, :]   # median − q_low  (positive)
             upper = q_arr[2, :] - q_arr[1, :]   # q_high − median (positive)
+            
+            # Collect y values (including error bar extremes)
+            all_y_vals.extend(med - lower)
+            all_y_vals.extend(med + upper)
 
             mean_c = auto_c_estimates[k]
-            label = rf'$\mathrm{{auto}},\ \bar{{c}} \approx {mean_c:.2f}$'
+            label = rf'$\approx {mean_c:.2f}$'
 
             ax.errorbar(
                 gens, med,
@@ -936,6 +977,24 @@ def time_series(
                 **plot_args,
             )
 
+        # ── Set tight y-axis limits based on actual data ────────────────────────
+        if len(all_y_vals) > 0:
+            all_y_vals = np.array(all_y_vals)
+            y_min = np.min(all_y_vals)
+            y_max = np.max(all_y_vals)
+            
+            if transform_name == 'log':
+                # For log scale, add small percentage margins
+                y_min = y_min / 1.15  # 15% margin below
+                y_max = y_max * 1.15  # 15% margin above
+            else:
+                # For linear scale, add percentage-based margin
+                margin = (y_max - y_min) * 0.1
+                y_min = y_min - margin
+                y_max = y_max + margin
+            
+            ax.set_ylim(y_min, y_max)
+
         # ── Axis labels ───────────────────────────────────────────────────────
         ax.set_xlabel(r'Generation')
         ax.set_ylabel(rf'${tylab}{ylab}$')
@@ -943,8 +1002,8 @@ def time_series(
         # ── Ticks: publication style (inward, all four sides) ────────────────
         ax.tick_params(axis='both', which='major',
                        direction='in', top=True, right=True, length=4)
-        ax.xaxis.set_minor_locator(AutoMinorLocator())
-        ax.yaxis.set_minor_locator(AutoMinorLocator())
+        # ax.xaxis.set_minor_locator(AutoMinorLocator())
+        # ax.yaxis.set_minor_locator(AutoMinorLocator())
         ax.tick_params(axis='both', which='minor',
                        direction='in', top=True, right=True, length=2)
         ax.spines['top'].set_visible(True)
@@ -964,15 +1023,15 @@ def time_series(
             framealpha=0.85,
             edgecolor='0.75',
             handlelength=1.8,
+            loc='upper right',
         )
 
-        fig.tight_layout()
         if out_handle is None:
             handle = 'results/output'
-            out_path = f'{handle}_{attr}.svg'
+            out_path = f'{handle}_{attr}.pdf'
         else:
-            out_path = f'{out_handle}_{attr}.svg'
-        plt.savefig(out_path, dpi=600, format='svg', bbox_inches='tight')
+            out_path = f'{out_handle}_{attr}.pdf'
+        plt.savefig(out_path, dpi=600, format='pdf', bbox_inches='tight', pad_inches=0.1)
         plt.close(fig)
         print(f'Saved: {out_path}')
 
@@ -986,22 +1045,27 @@ def pareto_frontier(
     x_attr='total_time',
     y_attr='log_hdpr_product',
     x_label=r'\mathrm{Wall\ Time\ (s)}',
-    y_label=r'\log\!\left(\prod_i \ell_i\right)',
+    #y_label=r'\log\!\left(\prod_i \ell_i\right)',
+    y_label=r'\mathrm{Log\ HDR\ Volume}',
     x_transform='id',
     y_transform='id',
     ref_label=r'\mathrm{Constant}',
     novel_label=r'\mathrm{Adaptive}',
-    ref_cmap='autumn',
-    novel_cmap='winter',
+    ref_cmap='YlOrRd',
+    novel_cmap='GnBu',
     legend_key_index_ref=0,
     legend_key_index=0,
     legend_title=None,
     auto_c_color='magenta',
     auto_c_marker='*',
     auto_c_label=r'\mathrm{auto}',
+    subset_idx = None,
+    subset_idx_ref = None,
     plot_args={},
+    plot_title='',
     out_filename=None,
-    post_hoc_stop = None
+    post_hoc_stop = None,
+    title=''
 ):
     """
     Plot Pareto frontiers comparing constant minibatch SMC-ABC (reference)
@@ -1053,32 +1117,21 @@ def pareto_frontier(
     plot_args : dict
         Extra kwargs forwarded to ax.errorbar for sweep points.
     out_filename : str or None
-        Output SVG path. Defaults to '{ref_handle}_vs_{novel_handle}_pareto.svg'.
+        Output pdf path. Defaults to '{ref_handle}_vs_{novel_handle}_pareto.pdf'.
     """
 
-    # import matplotlib.pyplot as plt
-    # import matplotlib.ticker as ticker
-    # from matplotlib.ticker import AutoMinorLocator
-    # import numpy as np
-
-    plt.rcParams.update({
-        'text.usetex': True,
-        'font.family': 'serif',
-        'font.serif': ['Computer Modern Roman'],
-        'axes.labelsize': 11,
-        'axes.titlesize': 11,
-        'xtick.labelsize': 9,
-        'ytick.labelsize': 9,
-        'legend.fontsize': 8,
-        'legend.title_fontsize': 9,
-        'figure.dpi': 150,
-        'savefig.dpi': 600,
-        'lines.linewidth': 1.4,
-    })
-
-    transforms = {'id': lambda x: x, 'log': np.log}
-    fx = transforms[x_transform]
-    fy = transforms[y_transform]
+    # Define transforms BEFORE extraction based on whether y_transform/x_transform are 'log'
+    # and whether the data is log_hdpr_product (which needs to be exponentiated first)
+    fx = lambda x: x
+    fy = lambda x: x
+    
+    # If y_attr is log_hdpr_product and y_transform is 'log', exponentiate to convert from ln to linear scale
+    if y_attr == 'log_hdpr_product' and y_transform == 'log':
+        fy = lambda x: np.exp(np.clip(x, -700, 700))  # Clip to avoid numerical issues
+    
+    # If x_attr is log_hdpr_product and x_transform is 'log', exponentiate to convert from ln to linear scale
+    if x_attr == 'log_hdpr_product' and x_transform == 'log':
+        fx = lambda x: np.exp(np.clip(x, -700, 700))  # Clip to avoid numerical issues
 
     def _resolve_cmap(c):
         return plt.get_cmap(c) if isinstance(c, str) else c
@@ -1086,13 +1139,7 @@ def pareto_frontier(
     ref_cmap_fn   = _resolve_cmap(ref_cmap)
     novel_cmap_fn = _resolve_cmap(novel_cmap)
 
-    # ── Load ──────────────────────────────────────────────────────────────────
-    ref_results   = load(ref_filename)
-    novel_results = load(novel_filename)
-    if post_hoc_stop is not None:
-        ref_results   = ph_stop(ref_results, post_hoc_stop)
-        novel_results = ph_stop(novel_results, post_hoc_stop)
-
+    # ── Load and Process ──────────────────────────────────────────────────────
     def _extract(results, attr, f):
         """Last-gen value per replicate, no truncation, then transform."""
         if callable(attr):
@@ -1104,11 +1151,24 @@ def pareto_frontier(
 
     def _quantiles(d):
         return get_quantiles(d, q=[0.25, 0.5, 0.75])
-
+    
+    # Reference first. 
+    ref_results   = load(ref_filename) if type(ref_filename) is str else ref_filename
+    ref_results = subset(ref_results,subset_idx_ref) if subset_idx_ref is not None else ref_results
+    if post_hoc_stop is not None:
+        ref_results   = ph_stop(ref_results, post_hoc_stop)
     ref_x   = _quantiles(_extract(ref_results,   x_attr, fx))
     ref_y   = _quantiles(_extract(ref_results,   y_attr, fy))
+    del ref_results # free memory 
+    gc.collect()
+
+    novel_results = load(novel_filename) if type(novel_filename) is str else novel_filename
+    novel_results = subset(novel_results,subset_idx) if subset_idx is not None else novel_results
+    if post_hoc_stop is not None:
+        novel_results = ph_stop(novel_results, post_hoc_stop)
     novel_x = _quantiles(_extract(novel_results, x_attr, fx))
     novel_y = _quantiles(_extract(novel_results, y_attr, fy))
+
 
     # ── Partition novel keys: sweep vs auto-c ─────────────────────────────────
     def _is_auto(k):
@@ -1117,20 +1177,6 @@ def pareto_frontier(
     novel_sweep_keys = [k for k in novel_x.keys() if not _is_auto(k)]
     novel_auto_keys  = [k for k in novel_x.keys() if     _is_auto(k)]
 
-    # ── Estimate mean c for auto keys (from raw results, attr 'c') ───────────
-    def _mean_c(results, keys):
-        """Average c across all replicates and generations for each auto key."""
-        estimates = {}
-        for k in keys:
-            replicates = results[k]
-            vals = [
-                gen['c']
-                for replicate in replicates
-                for gen in replicate
-                if 'c' in gen
-            ]
-            estimates[k] = np.mean(vals) if vals else float('nan')
-        return estimates
     def check_c(results):
         '''If c is in first result, returns True.'''
         keys = [k for k in results.keys()]
@@ -1151,6 +1197,8 @@ def pareto_frontier(
         return outputs
     #auto_c_estimates = _mean_c(novel_results, novel_auto_keys)
     auto_c_estimates = calc_mean_c(novel_results)
+    del novel_results # free memory
+    gc.collect()
 
     # ── Colors for sweep points ───────────────────────────────────────────────
     def _colors(cmap_fn, n, lo=0.35, hi=0.90):
@@ -1160,11 +1208,17 @@ def pareto_frontier(
     novel_sweep_colors = _colors(novel_cmap_fn, len(novel_sweep_keys))
 
     # ── Figure ────────────────────────────────────────────────────────────────
+    #fig, ax = plt.subplots(figsize=(8.5, 6.0))
     fig, ax = plt.subplots(figsize=(5.5, 4.0))
+    
+    if y_transform == 'log':
+        ax.set_yscale('log')
+    if x_transform == 'log':
+        ax.set_xscale('log')
 
     # shared errorbar style
     _eb_kw = dict(
-        linewidth=0, marker='o', markersize=4.5,
+        linewidth=0, markersize=4.5,
         capsize=2.5, capthick=0.9, elinewidth=0.8,
     )
 
@@ -1183,6 +1237,7 @@ def pareto_frontier(
             qx[1], qy[1],
             xerr=[[qx[1]-qx[0]], [qx[2]-qx[1]]],
             yerr=[[qy[1]-qy[0]], [qy[2]-qy[1]]],
+            marker='s',
             color=color, **_eb_kw, **plot_args,
         )
         ref_handles.append(eb)
@@ -1199,6 +1254,7 @@ def pareto_frontier(
             qx[1], qy[1],
             xerr=[[qx[1]-qx[0]], [qx[2]-qx[1]]],
             yerr=[[qy[1]-qy[0]], [qy[2]-qy[1]]],
+            marker='o',
             color=color, **_eb_kw, **plot_args,
         )
         novel_handles.append(eb)
@@ -1206,7 +1262,11 @@ def pareto_frontier(
 
     # ── Auto-c points (magenta star, one per auto key) ────────────────────────
     auto_handles, auto_labels = [], []
-    for k in novel_auto_keys:
+    if len(novel_auto_keys) <= 1:
+        auto_c_color_list = [auto_c_color] * len(novel_auto_keys)
+    else:
+        auto_c_color_list = _colors(_resolve_cmap(auto_c_color), len(novel_auto_keys), lo=0.5, hi=0.9)
+    for k, auto_c_color in zip(novel_auto_keys,auto_c_color_list):
         qx, qy   = novel_x[k], novel_y[k]
         mean_c   = auto_c_estimates[k]
         eb = ax.errorbar(
@@ -1222,10 +1282,9 @@ def pareto_frontier(
         )
         auto_handles.append(eb)
         auto_labels.append(
-            rf'${auto_c_label},\ \bar{{c}} \approx {mean_c:.2f}$'
+            #rf'${auto_c_label},\ \bar{{c}} \approx {mean_c:.2f}$'
+            rf'$\approx {mean_c:.2f}$'
         )
-
-
 
     # # ── Two side-by-side legends, top-right ───────────────────────────────────
     # # Novel legend (right), then ref legend placed to its left via bbox offset.
@@ -1238,7 +1297,7 @@ def pareto_frontier(
     leg_novel = ax.legend(
         handles=novel_leg_handles,
         labels=novel_leg_labels,
-        title='$' + novel_label + '$' + '\n' + '$' + ltitle + '$',
+        title='$' + novel_label + '$' + '\n' + ltitle,
         alignment='center',
         loc='upper right',
         framealpha=0.85,
@@ -1261,7 +1320,7 @@ def pareto_frontier(
     leg_ref = ax.legend(
         handles=ref_handles,
         labels=ref_labels,
-        title='$' + ref_label + '$' + '\n' + '$\mathrm{Batch Size}$',
+        title='$' + ref_label + '$' + '\n' + '$n_t$',
         alignment='center',
         loc='upper right',  # Keep 'upper right' so its right edge touches the anchor
         framealpha=0.85,
@@ -1272,316 +1331,79 @@ def pareto_frontier(
         bbox_transform=ax.transAxes,
     )
     leg_ref.get_title().set_multialignment('center')
+    
+    # ── Auto-scale axes to focus on data with error bar margins ─────────────────
+    # Collect all median values and error bar extents for proper padding
+    all_y_medians = [ref_y[k][1] for k in ref_y.keys()] + [novel_y[k][1] for k in novel_y.keys()]
+    all_y_errors_lower = [ref_y[k][1] - ref_y[k][0] for k in ref_y.keys()] + [novel_y[k][1] - novel_y[k][0] for k in novel_y.keys()]
+    all_y_errors_upper = [ref_y[k][2] - ref_y[k][1] for k in ref_y.keys()] + [novel_y[k][2] - novel_y[k][1] for k in novel_y.keys()]
+    
+    all_x_medians = [ref_x[k][1] for k in ref_x.keys()] + [novel_x[k][1] for k in novel_x.keys()]
+    all_x_errors_lower = [ref_x[k][1] - ref_x[k][0] for k in ref_x.keys()] + [novel_x[k][1] - novel_x[k][0] for k in novel_x.keys()]
+    all_x_errors_upper = [ref_x[k][2] - ref_x[k][1] for k in ref_x.keys()] + [novel_x[k][2] - novel_x[k][1] for k in novel_x.keys()]
+    
+    if all_y_medians and not np.any(np.isinf(all_y_medians)):
+        # Find actual min/max considering error bars for each point
+        y_point_mins = [all_y_medians[i] - all_y_errors_lower[i] for i in range(len(all_y_medians))]
+        y_point_maxs = [all_y_medians[i] + all_y_errors_upper[i] for i in range(len(all_y_medians))]
+        y_min = np.nanmin(y_point_mins)
+        y_max = np.nanmax(y_point_maxs)
+        
+        if y_transform == 'log' and y_min > 0:
+            # On log scale, add tiny padding on bottom, extra on top for legends
+            log_y_min, log_y_max = np.log10(y_min), np.log10(y_max)
+            log_padding_bottom = 0.05 * (log_y_max - log_y_min)  # Tiny buffer
+            log_padding_top = 0.05 * (log_y_max - log_y_min)  # Extra room for legends
+            ax.set_ylim(10**(log_y_min - log_padding_bottom), 10**(log_y_max + log_padding_top))
+        elif y_min != y_max:
+            # On linear scale, add tiny padding on bottom, extra on top for legends
+            padding_bottom = 0.05 * (y_max - y_min)
+            padding_top = 0.2 * (y_max - y_min)
+            ax.set_ylim(y_min - padding_bottom, y_max + padding_top)
+    
+    if all_x_medians and not np.any(np.isinf(all_x_medians)):
+        # Find actual min/max considering error bars for each point
+        x_point_mins = [all_x_medians[i] - all_x_errors_lower[i] for i in range(len(all_x_medians))]
+        x_point_maxs = [all_x_medians[i] + all_x_errors_upper[i] for i in range(len(all_x_medians))]
+        x_min = np.nanmin(x_point_mins)
+        x_max = np.nanmax(x_point_maxs)
+        
+        if x_transform == 'log' and x_min > 0:
+            # On log scale, add tiny padding on sides
+            log_x_min, log_x_max = np.log10(x_min), np.log10(x_max)
+            log_padding = 0.05 * (log_x_max - log_x_min)  # Tiny buffer
+            ax.set_xlim(10**(log_x_min - log_padding), 10**(log_x_max + log_padding))
+        elif x_min != x_max:
+            # On linear scale, add tiny padding on sides
+            padding = 0.05 * (x_max - x_min)
+            ax.set_xlim(x_min - padding, x_max + padding)
+    
     # ── Axes styling ──────────────────────────────────────────────────────────
     ax.set_xlabel(rf'${x_label}$')
     ax.set_ylabel(rf'${y_label}$')
+    ax.set_title(title)
 
     ax.tick_params(axis='both', which='major',
                    direction='in', top=True, right=True, length=4)
-    ax.xaxis.set_minor_locator(AutoMinorLocator())
-    ax.yaxis.set_minor_locator(AutoMinorLocator())
+    # ax.xaxis.set_minor_locator(AutoMinorLocator())
+    # ax.yaxis.set_minor_locator(AutoMinorLocator())
     ax.tick_params(axis='both', which='minor',
                    direction='in', top=True, right=True, length=2)
     ax.spines['top'].set_visible(True)
     ax.spines['right'].set_visible(True)
 
-    fig.tight_layout()
+    plt.title(plot_title)
 
+    # Adjust subplot margins to give plenty of room for legends and plot
+    #fig.subplots_adjust(left=0.12, right=0.98, top=0.92, bottom=0.11)
+    fig.tight_layout()
     # ── Save ─────────────────────────────────────────────────────────────────
     if out_filename is None:
         ref_handle   = ref_filename[:-4]
         novel_handle = novel_filename[:-4]
-        out_filename = f'{ref_handle}_vs_{novel_handle}_pareto.svg'
+        out_filename = f'{ref_handle}_vs_{novel_handle}_pareto.pdf'
 
-    plt.savefig(out_filename, dpi=600, format='svg', bbox_inches='tight')
+    plt.savefig(out_filename, dpi=600, format='pdf')
     plt.close(fig)
     print(f'Saved: {out_filename}')
 
-
-def pareto_frontier_scatter(
-    ref_filename,
-    novel_filename,
-    x_attr='total_time',
-    y_attr='log_hdpr_product',
-    x_label=r'\mathrm{Wall\ Time\ (s)}',
-    y_label=r'\log\!\left(\prod_i \ell_i\right)',
-    x_transform='id',
-    y_transform='id',
-    ref_label=r'\mathrm{Constant}',
-    novel_label=r'\mathrm{Adaptive}',
-    ref_cmap='autumn',
-    novel_cmap='winter',
-    legend_key_index_ref=0,
-    legend_key_index=0,
-    legend_title=None,
-    auto_c_color='magenta',
-    auto_c_marker='*',
-    auto_c_label=r'\mathrm{auto}',
-    markersize=6,
-    alpha_scatter=0.6,
-    out_filename=None,
-    post_hoc_stop=None
-):
-    """
-    Scatter plot version of pareto frontier comparing reference vs novel methods.
-    
-    Instead of plotting quantile error bars, plots every replicate as a scatter point,
-    colored by parameter sweep. Reference and novel methods are shown separately
-    with different colormaps.
-
-    Parameters
-    ----------
-    ref_filename : str
-        Path to reference (constant minibatch) .pkl results file.
-    novel_filename : str
-        Path to novel (adaptive) .pkl results file.
-    x_attr : str
-        Cost metric (e.g., 'total_time').
-    y_attr : str
-        Accuracy metric (e.g., 'log_hdpr_product').
-    x_label : str
-        Raw LaTeX string for x-axis label.
-    y_label : str
-        Raw LaTeX string for y-axis label.
-    x_transform : {'id', 'log'}
-        Transform applied to x values.
-    y_transform : {'id', 'log'}
-        Transform applied to y values.
-    ref_label : str
-        LaTeX display name for reference method.
-    novel_label : str
-        LaTeX display name for novel method.
-    ref_cmap : str or Colormap
-        Colormap for reference scatter points.
-    novel_cmap : str or Colormap
-        Colormap for novel scatter points.
-    legend_key_index_ref : int
-        Index into param tuple for reference legend.
-    legend_key_index : int
-        Index into param tuple for novel legend.
-    legend_title : str or None
-        Shared sweep-parameter label.
-    auto_c_color : str
-        Color for auto-c points.
-    auto_c_marker : str
-        Marker for auto-c points.
-    auto_c_label : str
-        Label for auto-c in legend.
-    markersize : int
-        Size of scatter points.
-    alpha_scatter : float
-        Transparency of scatter points (0-1).
-    out_filename : str or None
-        Output SVG path.
-    post_hoc_stop : callable or None
-        Post-hoc stopping function to apply.
-    """
-
-    plt.rcParams.update({
-        'text.usetex': True,
-        'font.family': 'serif',
-        'font.serif': ['Computer Modern Roman'],
-        'axes.labelsize': 11,
-        'axes.titlesize': 11,
-        'xtick.labelsize': 9,
-        'ytick.labelsize': 9,
-        'legend.fontsize': 8,
-        'legend.title_fontsize': 9,
-        'figure.dpi': 150,
-        'savefig.dpi': 600,
-        'lines.linewidth': 1.4,
-    })
-
-    transforms = {'id': lambda x: x, 'log': np.log}
-    fx = transforms[x_transform]
-    fy = transforms[y_transform]
-
-    def _resolve_cmap(c):
-        return plt.get_cmap(c) if isinstance(c, str) else c
-
-    ref_cmap_fn = _resolve_cmap(ref_cmap)
-    novel_cmap_fn = _resolve_cmap(novel_cmap)
-
-    # ── Load ──────────────────────────────────────────────────────────────────
-    ref_results = load(ref_filename)
-    novel_results = load(novel_filename)
-    if post_hoc_stop is not None:
-        ref_results = ph_stop(ref_results, post_hoc_stop)
-        novel_results = ph_stop(novel_results, post_hoc_stop)
-
-    def _extract_all_replicates(results, attr, f):
-        """
-        Extract all replicate values at last generation.
-        Returns dict: param_key -> list of values (one per replicate).
-        """
-        raw = get_attr(results, attr, trunc=False, slice=-1)
-        return {k: f(np.array(v, dtype=float)) for k, v in raw.items()}
-
-    ref_x = _extract_all_replicates(ref_results, x_attr, fx)
-    ref_y = _extract_all_replicates(ref_results, y_attr, fy)
-    novel_x = _extract_all_replicates(novel_results, x_attr, fx)
-    novel_y = _extract_all_replicates(novel_results, y_attr, fy)
-
-    # ── Partition novel keys: sweep vs auto-c ─────────────────────────────────
-    def _is_auto(k):
-        return k[legend_key_index] is None
-
-    novel_sweep_keys = [k for k in novel_x.keys() if not _is_auto(k)]
-    novel_auto_keys = [k for k in novel_x.keys() if _is_auto(k)]
-
-    # ── Calculate mean c for auto keys ────────────────────────────────────────
-    def check_c(results):
-        '''If c is in first result, returns True.'''
-        keys = [k for k in results.keys()]
-        if 'c' in results[keys[0]][0][0]:
-            return True
-        else:
-            return False
-
-    def calc_mean_c(results):
-        if check_c(results):
-            c_list = get_attr(results, 'c', trunc=False, slice=-1)
-            outputs = {}
-            for k in results.keys():
-                outputs[k] = np.mean(c_list[k])
-        else:
-            outputs = {}
-            for k in results.keys():
-                outputs[k] = np.nan
-        return outputs
-
-    auto_c_estimates = calc_mean_c(novel_results)
-
-    # ── Colors for parameter sweep ────────────────────────────────────────────
-    def _colors(cmap_fn, n, lo=0.35, hi=0.90):
-        return [cmap_fn(lo + (hi - lo) * i / max(n - 1, 1)) for i in range(n)]
-
-    ref_colors = _colors(ref_cmap_fn, len(ref_x))
-    novel_sweep_colors = _colors(novel_cmap_fn, len(novel_sweep_keys))
-
-    # ── Figure ────────────────────────────────────────────────────────────────
-    fig, ax = plt.subplots(figsize=(5.5, 4.0))
-
-    def _label_val(val):
-        if isinstance(val, float) and abs(val) < 0.01:
-            return rf'${val:.2e}$'
-        return rf'${val}$'
-
-    # ── Reference sweep: scatter all replicates ───────────────────────────────
-    ref_handles, ref_labels = [], []
-    for color, k in zip(ref_colors, ref_x.keys()):
-        x_vals = ref_x[k]
-        y_vals = ref_y[k]
-        scatter = ax.scatter(
-            x_vals, y_vals,
-            color=color,
-            s=markersize**2,
-            alpha=alpha_scatter,
-            edgecolors='none',
-        )
-        ref_handles.append(scatter)
-        ref_labels.append(_label_val(k[legend_key_index_ref]))
-
-    # ── Novel sweep: scatter all replicates ───────────────────────────────────
-    novel_handles, novel_labels = [], []
-    for color, k in zip(novel_sweep_colors, novel_sweep_keys):
-        x_vals = novel_x[k]
-        y_vals = novel_y[k]
-        scatter = ax.scatter(
-            x_vals, y_vals,
-            color=color,
-            s=markersize**2,
-            alpha=alpha_scatter,
-            edgecolors='none',
-        )
-        novel_handles.append(scatter)
-        novel_labels.append(_label_val(k[legend_key_index]))
-
-    # ── Auto-c points (magenta star, one point per auto key) ──────────────────
-    auto_handles, auto_labels = [], []
-    for k in novel_auto_keys:
-        x_vals = novel_x[k]
-        y_vals = novel_y[k]
-        mean_c = auto_c_estimates[k]
-        scatter = ax.scatter(
-            x_vals, y_vals,
-            color=auto_c_color,
-            marker=auto_c_marker,
-            s=markersize**2 * 2,  # Make auto-c points slightly bigger
-            alpha=alpha_scatter,
-            edgecolors='none',
-            zorder=5,
-        )
-        auto_handles.append(scatter)
-        auto_labels.append(
-            rf'${auto_c_label},\ \bar{{c}} \approx {mean_c:.2f}$'
-        )
-
-    # ── Legends: side-by-side at top-right ────────────────────────────────────
-    ltitle = legend_title if legend_title is not None else rf'$\theta_{{{legend_key_index}}}$'
-    novel_leg_handles = novel_handles + auto_handles
-    novel_leg_labels = novel_labels + auto_labels
-
-    # Novel legend (right)
-    leg_novel = ax.legend(
-        handles=novel_leg_handles,
-        labels=novel_leg_labels,
-        title='$' + novel_label + '$' + '\n' + '$' + ltitle + '$',
-        alignment='center',
-        loc='upper right',
-        framealpha=0.85,
-        edgecolor='0.75',
-        handlelength=1.0,
-        borderpad=0.6,
-        scatterpoints=1,
-    )
-    ax.add_artist(leg_novel)
-
-    # Force draw to get legend dimensions
-    fig.canvas.draw()
-
-    # Get left edge of novel legend
-    inv = ax.transAxes.inverted()
-    bbox_novel = leg_novel.get_window_extent().transformed(inv)
-    left_edge = bbox_novel.x0
-
-    # Reference legend (left of novel legend)
-    leg_ref = ax.legend(
-        handles=ref_handles,
-        labels=ref_labels,
-        title='$' + ref_label + '$' + '\n' + '$' + ltitle + '$',
-        alignment='center',
-        loc='upper right',
-        framealpha=0.85,
-        edgecolor='0.75',
-        handlelength=1.0,
-        borderpad=0.6,
-        bbox_to_anchor=(left_edge - 0.01, 1.0),
-        bbox_transform=ax.transAxes,
-        scatterpoints=1,
-    )
-
-    # ── Axes styling ──────────────────────────────────────────────────────────
-    ax.set_xlabel(rf'${x_label}$')
-    ax.set_ylabel(rf'${y_label}$')
-
-    ax.tick_params(axis='both', which='major',
-                   direction='in', top=True, right=True, length=4)
-    ax.xaxis.set_minor_locator(AutoMinorLocator())
-    ax.yaxis.set_minor_locator(AutoMinorLocator())
-    ax.tick_params(axis='both', which='minor',
-                   direction='in', top=True, right=True, length=2)
-    ax.spines['top'].set_visible(True)
-    ax.spines['right'].set_visible(True)
-
-    fig.tight_layout()
-
-    # ── Save ─────────────────────────────────────────────────────────────────
-    if out_filename is None:
-        ref_handle = ref_filename[:-4]
-        novel_handle = novel_filename[:-4]
-        out_filename = f'{ref_handle}_vs_{novel_handle}_pareto_scatter.svg'
-
-    plt.savefig(out_filename, dpi=600, format='svg', bbox_inches='tight')
-    plt.close(fig)
-    print(f'Saved: {out_filename}')
