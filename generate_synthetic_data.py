@@ -1,6 +1,7 @@
 '''
-Generate synthetic data
- 
+One-off script that generates the reference (observed) datasets used by every experiment
+script. Output paths are fixed because experiments.py, experiment_*.py, and the notebooks
+all load these two files by name.
 '''
 #### Generate lotka volterra data
 import lotka_volterra as lv

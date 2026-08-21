@@ -1,3 +1,9 @@
+"""
+Standalone figure script: simulates and plots a single Gillespie trajectory (mRNA count +
+promoter state over time) for the illustrative Kilic model figure. This duplicates the SSA
+logic in `kilic_model.simulate` without numba, and additionally records the promoter state
+`s_out`, so a single trajectory can be plotted step-by-step; it is not used for inference.
+"""
 import numpy as np
 import matplotlib.pyplot as plt
 
@@ -7,11 +13,13 @@ np.random.seed(0)
 
 def simulate_gene_expression_plotting(params, G, K, t_max, sample_times, max_steps=10000):
     """
-    Numba-compatible stochastic gene expression simulation (Gillespie SSA).
+    Plain-Python stochastic gene expression simulation (Gillespie SSA), also returning the
+    promoter state trace (unlike `kilic_model.simulate`).
+
     params: [K_12, K_21, ..., Beta_1,...,Beta_G, Delta]
     Returns:
-        t_out : (K, len(sample_times)) array
-        m_out : (K, len(sample_times)) array
+        t_out, m_out, s_out : each (K, len(sample_times)) arrays (time of last reaction,
+        mRNA count, and promoter state at each sample time)
     """
     n_switch = G * (G - 1)
     K_rates = np.zeros((G, G))

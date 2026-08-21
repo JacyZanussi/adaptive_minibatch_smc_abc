@@ -1,6 +1,8 @@
 '''
-Experiments for Figure 2: Transcriptional dynamics
+Figure 2: sweeps the FVC scheme's own hyperparameters (n0, c, lambda) against a constant-batch
+baseline, for both Transcriptional Dynamics (TD) and Lotka-Volterra (LV).
 Inline arguments: $SLURM_ARRAY_TASK_ID
+Array index -> sweep: 0-3 = TD [constant, fvc_lambda, fvc_n0, fvc_c]; 4-7 = LV (same order).
 '''
 #imports
 import experiments

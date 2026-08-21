@@ -18,38 +18,6 @@ from matplotlib.lines import Line2D
 from matplotlib.patches import Patch, Rectangle
 import matplotlib.colors as mcolors
 
-# # =========================
-# # Font size parameters (adjust these to scale all fonts)
-# # =========================
-# FONT_SIZE_AXES_LABEL = 20      # Font size for axis labels (xlabel, ylabel)
-# FONT_SIZE_AXES_TITLE = 20      # Font size for axis titles
-# FONT_SIZE_XTICK = 14           # Font size for x-axis tick labels
-# FONT_SIZE_YTICK = 14           # Font size for y-axis tick labels
-# FONT_SIZE_LEGEND = 11          # Font size for legend text
-# FONT_SIZE_LEGEND_TITLE = 12    # Font size for legend title
-
-# plt.rcParams.update({
-#     'text.usetex': False,
-#     'mathtext.fontset': 'cm',
-#     'font.family': 'serif',
-#     'font.serif': ['cmr10'],
-#     'axes.formatter.use_mathtext': True,
-#     'axes.labelsize': FONT_SIZE_AXES_LABEL,
-#     'axes.titlesize': FONT_SIZE_AXES_TITLE,
-#     'xtick.labelsize': FONT_SIZE_XTICK,
-#     'ytick.labelsize': FONT_SIZE_YTICK,
-#     'legend.fontsize': FONT_SIZE_LEGEND,
-#     'legend.title_fontsize': FONT_SIZE_LEGEND_TITLE,
-#     'figure.dpi': 600,
-#     'savefig.dpi': 600,
-#     'lines.linewidth': 2.2,
-#     'errorbar.capsize': 2.5,
-#     'svg.fonttype': 'none',
-#     'svg.hashsalt': '42',
-#     'pdf.fonttype': 42,
-#     'ps.fonttype': 42
-# })
-
 
 FONT_SIZE_AXES_LABEL = 16
 FONT_SIZE_AXES_TITLE = 16
@@ -125,7 +93,8 @@ var_names = ["$K_{1,2}$","$K_{2,1}$","$B_1$","$B_2$"]
 #wang_ests = data_Wang['ground']['rates']
 wang_ests = np.array([0.00533,0.03,0.0,0.166,0.00533]) # From Wang
 
-#NOTE: Eyeballed.... Because They didn't get these... I literally took a piece of paper to my computer screen and zoomed in.
+#NOTE: kilic_ests are manually read off a published figure (not machine-readable/extracted data);
+# treat as an approximate visual reference only, not a precise ground truth.
 kilic_ests = np.array([0.00255,0.012,0.00015,0.1666])
 
 last_gen_const = np.max([x for x in df_const[0]])

@@ -5,9 +5,6 @@ We measure data for each generation and pickle it at the end.
 The outputs are in the format: 
     Dictionary of keys (parameter sets) values (list of replicates (list of generations (dictionary of information)))
 '''
-
-
-## Import smc abc class and schemes
 import smc_abc_schemes as schemes
 import smc_abc_utils as utils
 
@@ -19,12 +16,8 @@ from itertools import product
 
 from numba import njit
 
-#from matplotlib import pyplot as plt
-
 import matplotlib.pyplot as plt
 import matplotlib.ticker as ticker
-from matplotlib.ticker import AutoMinorLocator
-import numpy as np
 
 
 #A class that generates smfish transcriptional dynamics snapshots
@@ -38,15 +31,25 @@ def lotka_volterra_step(
     seed=None, 
     #a = 4, b = 0.01, g = 4, d = 1, #Physical parameters
     physical_params = [4,0.01,4], d = 1,
-    input_filename = None, heterogeneities = [999], #Heterogeneities 
-    scheme = 'constant', # Scheme
-    scheme_params = [2], # Scheme hyperparameter
+    input_filename = None, heterogeneities = [999],
+    scheme = 'constant',
+    scheme_params = [2],
     stop_func = None,
-    sample_size = 128, T = 5, dt = 0.01, #simulation parameters (base)
-    alpha = 0.5, num_particles = 500, cores = 4, #estimator parameters
+    sample_size = 128, T = 5, dt = 0.01,
+    alpha = 0.5, num_particles = 500, cores = 4, 
     prior_domain = [[0.0,10.0],[0.0,0.05],[0.0,10.0]],
     **kwargs
 ):
+    """
+    Run one full SMC-ABC replicate inferring Lotka-Volterra rate parameters (alpha, beta, gamma).
+
+    If `input_filename` is given, reference data and initial conditions are loaded from a
+    pickle (as produced by `generate_synthetic_data.py`); otherwise data is freshly simulated
+    from `physical_params`. `heterogeneities[0]` is the width of the uniform range used to draw
+    initial predator/prey counts (centered at 500). Returns the list of per-generation info
+    dicts produced by `get_info()` (one entry per generation, in order).
+    """
+    #alpha, beta, and gamma. kept as single letters because "alpha" is already used
     a,b,g = list(physical_params)
     rng = np.random.default_rng(seed)
 
@@ -72,16 +75,17 @@ def lotka_volterra_step(
 
     #s_data = stats_func_lv(data)
     N_stats = data.shape[1]
-    def model(p, Bi, num_reps=1, seed=None):
+    def model(p, batch_indices, num_reps=1, seed=None):
+        """Simulate `num_reps` LV trajectories for the given batch of initial conditions and average their summary statistics."""
         alpha, beta, gamma = p
-        s_sim = np.zeros((Bi.shape[0],N_stats))
+        s_sim = np.zeros((batch_indices.shape[0],N_stats))
         rep_rng = np.random.default_rng(seed) if seed is not None else None
         for _ in range(num_reps):
             rep_seed = int(rep_rng.integers(np.iinfo(np.int64).max)) if rep_rng is not None else -1
-            _, sim = lv.tau_leaping(ic[Bi], T,alpha, beta, gamma, d, dt=dt, seed=rep_seed)
+            _, sim = lv.tau_leaping(ic[batch_indices], T,alpha, beta, gamma, d, dt=dt, seed=rep_seed)
             s_sim += stats_func_lv(sim)
         s_sim /= num_reps
-        s_obs = data[Bi]
+        s_obs = data[batch_indices]
         return s_sim, s_obs
     ### Prior
     prior = utils.uniform_prior(prior_domain, seed=seed)
@@ -110,14 +114,12 @@ def lotka_volterra_step(
     }
     stop = default_stop if stop_func is None else stop_func
 
-    #Maybe make this a function since it'll be repeated code...
     results_list = []
     est = init(init_params,scheme_params)
     while not stop(est):
         loop(est)
         results = get_info(est)
         results_list.append(results)
-
     return results_list
 
 # Summary Statistics: predator prey model
@@ -136,6 +138,15 @@ def batch_corr_single(a, b, eps=1e-8):
 
 @njit
 def stats_func_lv(x, max_lag=1, step_size=10):
+    """
+    Summary statistics for one batch of LV trajectories `x`, shape (n_replicates, n_timesteps, 2)
+    with columns [prey, predator].
+
+    Output columns: [0] prey-predator correlation, [1] log mean prey, [2] log mean predator,
+    [3] log variance of prey, then for each lag in `1..max_lag` (spaced `step_size` steps apart):
+    prey autocorrelation, predator autocorrelation. All computed only up to the extinction index
+    (first time either population drops to <= 1), and set to 0 where a lag exceeds that index.
+    """
     n_replicates = x.shape[0]
     n_timesteps = x.shape[1]
     eps = 1e-8
@@ -149,7 +160,7 @@ def stats_func_lv(x, max_lag=1, step_size=10):
         r_full = x[i, :, 0]
         f_full = x[i, :, 1]
         
-        # --- 1. Find Extinction Index ---
+        # 1. Find Extinction Index
         ext_ind = n_timesteps # Default to full length
         for t in range(n_timesteps):
             if r_full[t] <= 1 or f_full[t] <= 1:
@@ -160,13 +171,13 @@ def stats_func_lv(x, max_lag=1, step_size=10):
         r = r_full[:ext_ind]
         f = f_full[:ext_ind]
         
-        # --- 2. Base Moments ---
+        # 2. Base Moments
         out[i, 0] = batch_corr_single(r, f, eps)
         out[i, 1] = np.log(np.mean(r) + eps)
         out[i, 2] = np.log(np.mean(f) + eps)
         out[i, 3] = np.log(np.var(r) + eps)
 
-        # --- 3. Autocorrelation Lags ---
+        # 3. Autocorrelation Lags
         for l_idx in range(1, max_lag + 1):
             lag = l_idx * step_size
             col_r = 4 + (l_idx - 1) * 2
@@ -187,10 +198,10 @@ def transcriptional_dynamics_step(
     seed=None, 
     #kplus = 30, kminus = 10, rburst = 10, diffusivity = 0.1, #Physical parameters
     physical_params = [30,10,0.1], kminus = 10,
-    input_filename = None, #Heterogeneities - resimulate for 
+    input_filename = None, #Heterogeneities
     heterogeneities = [2,4], #bp = 2, gp = 4
-    scheme = 'constant', # Scheme
-    scheme_params = [2], # Scheme hyperparameter
+    scheme = 'constant',
+    scheme_params = [2],
     stop_func = None,
     sample_size = 512, T = 5, dt = 0.01, #simulation parameters (base)
     alpha = 0.5, num_particles = 500, cores = 4, #estimator parameters
@@ -201,6 +212,11 @@ def transcriptional_dynamics_step(
     A self-contained application of SMC ABC to the transcriptional dynamics model.
     Constitutes one replicate application of SMC ABC in the benchmark.
     Records data according to get_info()
+
+    `heterogeneities = [bp, gp]` are the beta/gamma shape parameters used to draw each cell's
+    transcription-site position and nuclear length (see `transcriptional_dynamics.simulate`);
+    `None` disables that source of heterogeneity (fixed length / centered site). If
+    `input_filename` is given, data/sites/lengths are loaded instead of freshly simulated.
     '''
     kplus,rburst,diffusivity = list(physical_params)
     rng = np.random.default_rng(seed)
@@ -230,16 +246,17 @@ def transcriptional_dynamics_step(
             lengths = td_dat['lengths']
 
     ### Simulator
-    def model(p,Bi,seed=None):
-        z = sites[Bi,]
-        l = lengths[Bi,]
-        obs_data = [data[i] for i in Bi]
+    def model(p,batch_indices,seed=None):
+        """Simulate transcriptional dynamics for the cells at `batch_indices` under parameters `p = [kplus, rburst, diffusivity]`."""
+        z = sites[batch_indices,]
+        l = lengths[batch_indices,]
+        obs_data = [data[i] for i in batch_indices]
         sim = td.simulate(p[0], kminus, p[1], p[2], T, dt, z, l, seed if seed is not None else -1)
         return sim, obs_data
 
     ### Prior
     prior = utils.uniform_prior(prior_domain,seed = seed)
-    if stats_per_batch:
+    if stats_per_batch: ## Unused, because per-sample is what we end up using. Kept for reference.
         statsf = stats_func_td_per_batch
     else:
         statsf = stats_func_td
@@ -284,6 +301,7 @@ def transcriptional_dynamics_step(
 # Summary Statistics: Transcriptional Dynamics
 @njit
 def stats_func_td(x):
+    """Per-cell summary statistics: [0] mRNA count, [1] squared deviation of count from the batch mean, [2] within-cell spatial std (0 if fewer than 2 mRNAs)."""
     batch_size = len(x)
     out = np.zeros((batch_size, 3))
     for i in range(batch_size):
@@ -299,6 +317,7 @@ def stats_func_td(x):
 
 @njit
 def stats_func_td_per_batch(x):
+    """Batch-level (not per-cell) summary statistics: [0] mean mRNA count, [1] variance of count, [2] mean within-cell spatial std across the batch."""
     batch_size = len(x)
     out = np.zeros((3,))
     counts = np.zeros((batch_size,))
@@ -387,6 +406,7 @@ def simulate_experiment(output_filename, parameter_set_list, model_name = None, 
 
 
 def to_key(p):
+    """Build the dict key used to group results in `simulate_experiment`, from a parameter dict's scheme/physical/heterogeneity settings."""
     keys = [k for k in p.keys()]
     tup = ()
     if 'scheme_params' in keys:
@@ -399,11 +419,17 @@ def to_key(p):
         print("Key not defined. Defaulting to ... (no default defined yet)")
     return tup
 
+
+# We end up not using this
 ## SNR of 2 because we don't want to learn noise. This is lower limit before that.
 ## acceptance rate < 0.02 for a similar reason: we don't want to spend more than 100 sims per particle. 
 ## Average worst-case scenario suggests acceptance shouldn't drop much faster than alpha quantile.
+MIN_SNR = 2
+MIN_ACCEPTANCE_RATE = 0.02
+MIN_GENERATIONS_BEFORE_STOP = 5
 def default_stop(est):
-    return ((est.snr < 2) or (est.acceptance_rate < 0.02)) and (est.generation > 5)
+    """Default stopping rule: stop once SNR or acceptance rate drops too low, but never before `MIN_GENERATIONS_BEFORE_STOP` generations."""
+    return ((est.snr < MIN_SNR) or (est.acceptance_rate < MIN_ACCEPTANCE_RATE)) and (est.generation > MIN_GENERATIONS_BEFORE_STOP)
 
 
 attr_list = [
@@ -414,7 +440,10 @@ attr_list = [
 ]
 
 #Observes the data in est. Gets the information to store in the output
+# NOTE: these are the exact dict keys written into every saved results pickle (via simulate_experiment ->
+# save()). Do not rename entries here without a plan for migrating/re-reading already-saved results.
 def get_info(est,attr_list = attr_list):
+    """Snapshot the attributes in `attr_list` off `est` (calling any that are callable) into a plain dict."""
     dict = {}
     for attr in attr_list:
         if hasattr(est,attr):
@@ -427,6 +456,9 @@ def get_info(est,attr_list = attr_list):
 
 def make_parameter_list(sweep_config):
     '''
+    Expand a dict of parameter -> [values to sweep] into the cartesian-product list of
+    single-valued parameter dicts expected by `simulate_experiment`.
+
     parameters
     ----------
     sweep_config : dictionary
@@ -539,6 +571,7 @@ def get_attr(results, attr, trunc=True, slice=None):
 
 #helps get quantiles as used in the plots.
 def get_quantiles(attr_dict,q = [0.25,0.5,0.75]):
+    """Compute quantiles `q` (default: lower quartile, median, upper quartile) along axis 0 for each entry of `attr_dict`."""
     out = {}
     for k in attr_dict.keys():
         out[k] = np.quantile(attr_dict[k],q,axis=0)
@@ -669,6 +702,7 @@ def subset(data, keys_to_keep):
 
 #wrapper that combines several dictionaries
 def combine(*dicts):
+    """Merge several loaded results dicts into one (later dicts overwrite earlier ones on key collision)."""
     results = {}
     for d in dicts:
         results |= d
@@ -763,6 +797,7 @@ def plot_ts(x_axis,y_axis,fig_ax = None, grid_lines = False, #basics
 
 
 def noise(res,trunc,slice):
+    """Per-generation noise-to-signal proxy `v_total_est / batch_size`, for use as a `time_series` attribute."""
     v_total = get_attr(res,'v_total_est',trunc=trunc,slice=slice)
     n = get_attr(res,'batch_size',trunc=trunc,slice=slice)
     output = {}
@@ -826,12 +861,6 @@ def time_series(
     plot_args : dict
         Extra kwargs forwarded to ax.errorbar.
     """
-
-    import matplotlib.pyplot as plt
-    import matplotlib.ticker as ticker
-    from matplotlib.ticker import AutoMinorLocator
-    import numpy as np
-
 
     results = load(results_filename)
     if post_hoc_stop is not None: 

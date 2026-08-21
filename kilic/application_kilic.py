@@ -37,11 +37,6 @@ satid = int(sys.argv[1])
 # Data loading
 # =========================
 
-#DATA_PATH = (
-#    "datasets/"
-#    "Wang2020_SFig21_2_tf_1800_K_18_J_2000_5e-03_3e-02_0e+00_2e-01_5e-03.mat"
-#)
-
 data_Wang = sio.loadmat("datasets/Wang2020_SFig21_2_tf_1800_K_18_J_2000_5e-03_3e-02_0e+00_2e-01_5e-03.mat", simplify_cells=True)
 
 data = data_Wang["r_ct"].T[:, 1:]
@@ -101,13 +96,8 @@ def stats_func_wang(x):
             out[i, N_data + j] = (val - col_means[j]) ** 2
     return out
 
-#def stats_func_wang(x):
-#    x_nonan = np.where(np.isnan(x),0.0,x)
-#    xvar_infl = (x_nonan - np.mean(x_nonan,axis=0)[None,:])**2
-#    stats = np.hstack((x_nonan,xvar_infl))
-#    return stats
-
 def stats_func(x, y):
+    """Wraps `stats_func_wang` into the (sim, ref) -> (sim_stats, ref_stats) contract expected by smc_abc_iterator."""
     return stats_func_wang(x), stats_func_wang(y)
 
 
@@ -124,6 +114,7 @@ mu = np.ascontiguousarray(mu, dtype=np.float64)
 Sigma = np.ascontiguousarray(Sigma, dtype=np.float64)
 base_rng = np.random.default_rng(seed) if seed is not None else None
 def prior_func(rng=None):
+    """Draw params as 10**z where z ~ N(mu, Sigma) (i.e. a log10-multivariate-lognormal prior)."""
     if rng is not None:
         z = rng.multivariate_normal(mu, Sigma)
     elif base_rng is not None:
@@ -134,6 +125,7 @@ def prior_func(rng=None):
 
 
 def density(x, mu=mu, Sigma=Sigma):
+    """Density of the log10-multivariate-lognormal prior at x (0 for any non-positive component)."""
     x = np.atleast_2d(x).astype(float)
     valid = np.all(x > 0, axis=1)
     logpdf = np.full(x.shape[0], -np.inf)
@@ -180,6 +172,7 @@ INIT_PARAMS = dict(
 TIME_LIMIT = 2 * 60 * 60
 
 def extract_tracking(est):
+    """Per-generation diagnostics saved for this run (separate dict/keys from experiments.get_info's attr_list)."""
     return dict(
         generation=est.generation,
         total_time=est.total_time,

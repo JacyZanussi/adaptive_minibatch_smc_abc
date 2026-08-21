@@ -1,7 +1,9 @@
 .venv/
 __pycache__
 benchmark_functions.py
-to_do_list.txt
+to_do_list.md
 *.pkl
 *.pdf
 *.svg
+results/*
+results/

@@ -152,7 +152,7 @@ def spatial_dynamics(Tbirth_sd, Nbirths_sd, class_index_sd,
     time = Tbirth_sd.copy()
     survived_boundary = bndry_func_njit(pos, class_index_sd, lengths)
 
-    v = np.sqrt(2.0 * D * dt)
+    v = np.sqrt(2.0 * D * dt)  # std dev of one Euler-Maruyama step of Brownian motion with diffusivity D
     n_steps = int(np.ceil((T - np.min(time)) / dt))
 
     # active[i] == True while particle i is still being propagated

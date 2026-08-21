@@ -3,6 +3,33 @@ from numba import njit
 
 @njit
 def tau_leaping(X0, t_max, alpha, beta, gamma, delta, dt=0.01, seed=-1, lower_bound=1.0):
+    """
+    Simulate a batch of stochastic Lotka-Volterra (predator-prey) trajectories via tau-leaping.
+
+    Reactions per fixed timestep `dt`: prey birth (rate alpha*R), predation (rate beta*R*F,
+    converts prey to predator biomass at efficiency `delta`), and predator death (rate gamma*F).
+    Event counts are drawn as Poisson(rate*dt) each step; consuming reactions are capped so a
+    population can't drop below `lower_bound` (avoids negative/extinct-but-still-decaying counts).
+
+    Parameters
+    ----------
+    X0 : np.ndarray, shape (batch_size, 2)
+        Initial [prey, predator] counts per replicate.
+    t_max, dt : float
+        Simulation horizon and fixed timestep.
+    alpha, beta, gamma, delta : float
+        Prey birth, predation, predator death, and predation-efficiency rates.
+    seed : int
+        If >= 0, seeds numpy's global RNG (numba njit can't take an isolated Generator).
+    lower_bound : float
+        Floor below which a population cannot be depleted further in a single step.
+
+    Returns
+    -------
+    times : np.ndarray, shape (nt,)
+    X : np.ndarray, shape (batch_size, nt, 2)
+        Trajectories, columns [prey, predator].
+    """
     if seed >= 0:
         np.random.seed(seed)
     batch_size = X0.shape[0]
@@ -38,6 +65,8 @@ def tau_leaping(X0, t_max, alpha, beta, gamma, delta, dt=0.01, seed=-1, lower_bo
     return times, X
 
 
+# Earlier variant that hard-freezes state on extinction (R or F < 1) instead of capping
+# consuming reactions; kept for reference/reproducibility, not used by any current script.
 # @njit
 # def tau_leaping(X0, t_max, alpha, beta, gamma, delta, dt=0.01, seed=-1):
 #     if seed >= 0:

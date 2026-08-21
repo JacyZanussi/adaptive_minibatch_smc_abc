@@ -1,8 +1,10 @@
 '''
-Experiments for Figure 2: Transcriptional dynamics
+Figure 3: sweeps each model's physical rate parameters (TD: kplus/rburst/diffusivity; LV:
+alpha/beta/gamma) one at a time, comparing constant-batch vs. FVC at each perturbed value.
 Inline arguments: $SLURM_ARRAY_TASK_ID
+Array index -> sweep: 0-5 = TD [constant/fvc x kplus, rburst, diffusivity]; 6-11 = LV
+[constant/fvc x alpha, beta, gamma].
 '''
-#imports
 import experiments
 import sys
 
@@ -14,7 +16,9 @@ num_sims = 10
 
 
 #Baseline constant and fvc can be obtained from the hyperparameter sweep
-sweeps_td = { #baseline: [30,10,0.1]
+sweeps_td = {
+    # Transriptional Dynamics
+    # baseline: [30,10,0.1]
     'constant_kplus' : experiments.make_parameter_list({
         'scheme_params':[[x] for x in [128,256,512]],
         'physical_params' : [[k,10,0.1] for k in [15,60]], 'scheme':['constant']
@@ -41,15 +45,19 @@ sweeps_td = { #baseline: [30,10,0.1]
     })
 }
 
-sweeps_lv = { #baseline: [4,0.01,4]
+sweeps_lv = { 
+    # Lotka Volterra
+    # baseline (true data-generating values, see generate_synthetic_data.py): [4,0.02,4]
     'constant_alpha' : experiments.make_parameter_list({
         'scheme_params':[[x] for x in [32,64,128]],
-        'physical_params' : [[a,0.01,4] for a in [2,8]], 'scheme':['constant']
+        'physical_params' : [[a,0.02,4] for a in [2,8]], 'scheme':['constant']
     }),
     'fvc_alpha' : experiments.make_parameter_list({
         'scheme_params':[[n0,None,1] for n0 in [2,4,8]],
-        'physical_params' : [[a,0.01,4] for a in [2,8]], 'scheme':['fvc']
+        'physical_params' : [[a,0.02,4] for a in [2,8]], 'scheme':['fvc']
     }),
+    # NOTE: unlike alpha/gamma (0.5x/2x of baseline), one of these values (0.02) equals the true
+    # baseline itself, so it isn't actually perturbed; confirm this is intentional before running.
     'constant_beta' : experiments.make_parameter_list({
         'scheme_params':[[x] for x in [32,64,128]],
         'physical_params' : [[4,b,4] for b in [0.005,0.02]], 'scheme':['constant']
@@ -60,11 +68,11 @@ sweeps_lv = { #baseline: [4,0.01,4]
     }),
     'constant_gamma' : experiments.make_parameter_list({
         'scheme_params':[[x] for x in [32,64,128]],
-        'physical_params' : [[4,0.01,g] for g in [2,8]], 'scheme':['constant']
+        'physical_params' : [[4,0.02,g] for g in [2,8]], 'scheme':['constant']
     }),
     'fvc_gamma' : experiments.make_parameter_list({
         'scheme_params':[[n0,None,1] for n0 in [2,4,8]],
-        'physical_params' : [[4,0.01,g] for g in [2,8]], 'scheme':['fvc']
+        'physical_params' : [[4,0.02,g] for g in [2,8]], 'scheme':['fvc']
     })
 }
 

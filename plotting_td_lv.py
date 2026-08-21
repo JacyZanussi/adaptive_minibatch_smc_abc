@@ -1,6 +1,12 @@
 '''
-Plot results for Transcriptional Dynamics and Lotka Volterra simulations
+Generates all paper figures for the Transcriptional Dynamics (TD) and Lotka-Volterra (LV)
+results, reading pre-computed results pickles from `results/` (produced by experiments.py /
+the job_scripts/ SLURM submissions) via `experiments.load()`.
 
+Run as `python plotting_td_lv.py [section]` where `section` is an integer selecting one part
+of the script (0: Figure 2 Pareto frontiers, 1: Figure 2 time series, 2: Figure 2 Pareto vs.
+simulation count, 3: Figure 3 heterogeneity Pareto frontiers, 4-5: Figure 4 heterogeneity
+sweeps, 6: posterior plots), or omitted/`'all'` to run every section.
 '''
 import gc
 import sys
@@ -16,6 +22,7 @@ else:
 
 RESULTS_DIR = 'results'
 def p(name):
+    """Shorthand: `results/<name>.pkl` path."""
     return os.path.join(RESULTS_DIR, name + '.pkl')
 
 
@@ -131,6 +138,7 @@ comparisons = [
 ]
 
 def get_key_list(data,val,idx):
+    """Return every param-tuple key in `data` whose entry at position `idx` is close to `val`."""
     set = []
     for k in data.keys():
         if np.all(np.isclose(val,k[idx],)):
@@ -170,8 +178,11 @@ if section == 3 or section == 'all':
 # and LV, which has 4-5 perturbations that are sequential (ic range). So,...
 
 def r(x):
+    """Round to 4 decimals, used to build stable dict keys for `stop_dict` from float heterogeneity params."""
     return round(x,4)
 
+# Post-hoc stopping generation per (shape, scale) heterogeneity pair, chosen by inspection of
+# each run's convergence so that all pairs are compared at a similarly-converged generation.
 stop_dict = {
     (r(10/3),r(1/30)):10,(r(10),r(1/30)):13,(r(30),r(1/30)):17,
     (r(10/3),r(1/10)):14, (r(10),r(1/10)):17, (r(30),r(1/10)):16,

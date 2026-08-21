@@ -1,10 +1,31 @@
-### Auxiliary functions for smc abc
+"""
+Auxiliary functions for SMC ABC: priors, stopping criteria, and benchmarking helpers.
+"""
 import numpy as np
 import timeit
 from matplotlib import pyplot as plt
 from numba import njit
 
 def uniform_prior(prior_domain, seed = None):
+    """
+    Build a uniform prior over a box-constrained parameter domain.
+
+    Parameters
+    ----------
+    prior_domain : array_like, shape (D, 2)
+        Row i gives the [lower, upper] bound for parameter i.
+    seed : int or None
+        Seed for the prior's own RNG, used only when `prior_func` is called
+        without an explicit `rng` (e.g. by code that doesn't manage seeding).
+
+    Returns
+    -------
+    list
+        [prior_func, prior_domain, density] where:
+        - prior_func(rng=None) draws one sample, shape (D,).
+        - prior_domain is the cleaned (D, 2) bounds array.
+        - density(x) evaluates the (unnormalized-safe) uniform density at x.
+    """
     # Ensure it's a clean, picklable NumPy array
     prior_domain = np.ascontiguousarray(prior_domain, dtype=np.float64)
     lower = prior_domain[:, 0]
@@ -30,6 +51,7 @@ def uniform_prior(prior_domain, seed = None):
 # Use standard NJIT functions instead of a JitClass instance
 @njit
 def n_sample(l, u):
+    """Numba fallback sampler: one uniform draw per dimension, shape (D,)."""
     out = np.empty(len(l))
     for i in range(len(l)):
         out[i] = np.random.uniform(l[i], u[i])
@@ -37,6 +59,7 @@ def n_sample(l, u):
 
 @njit
 def n_density(x, l, u, v):
+    """Uniform density (1/volume in-bounds, else 0) for a single point or a batch of points."""
     # Handle batching or single
     x_arr = np.atleast_2d(x)
     res = np.zeros(len(x_arr))
@@ -51,6 +74,7 @@ def n_density(x, l, u, v):
 
 
 ### stop function
+# Maps a comparison name to the operator used to test (current value) `op` (threshold).
 comparison_dict = {
     'lte': lambda x,y : x <= y,
     'lt': lambda x,y : x < y,
@@ -59,10 +83,21 @@ comparison_dict = {
 }
 def continue_func(attribute = 'current_alpha_threshold',comparison = "lte",threshold = np.inf):
     """
-    Returns a function that takes in an smc_abc object and returns True until the stopping criteria are satisfied. 
-    Functions so that While stopping criteria are not met, generate.
+    Build a `continue_func(est) -> bool` usable with `smc_abc_iterator.generate_until_stop`.
 
-    attribute : string - attribute of the smc_abc iterator object to be used 
+    The returned function reads `getattr(est, attribute)` each generation and returns True
+    (keep iterating) until that value satisfies `comparison` against `threshold`, at which
+    point it returns False (stop). E.g. comparison="lte" with threshold=0.01 continues while
+    `est.<attribute> > 0.01` and stops once it is <= 0.01.
+
+    Parameters
+    ----------
+    attribute : str
+        Attribute of the smc_abc_iterator object to monitor (e.g. 'acceptance_rate').
+    comparison : {"lte", "lt", "gte", "gt"}
+        How `est.<attribute>` (x) is compared against `threshold` (y): x <= y, x < y, x >= y, x > y.
+    threshold : float
+        The stopping threshold for the comparison.
     """
     if comparison not in [x for x in comparison_dict]:
         raise ValueError("comparison input must be \"lte\" \"lt\" \"gte\" or \"gt\". \n " \
@@ -74,6 +109,7 @@ def continue_func(attribute = 'current_alpha_threshold',comparison = "lte",thres
     return func
 
 def stop(est,attribute_name,threshold = 0.025,compare = lambda x,y : x < y):
+    """Return False (stop iterating) once `compare(getattr(est, attribute_name), threshold)` holds."""
     if compare(getattr(est,attribute_name),threshold):
         return False
     else:
@@ -82,6 +118,7 @@ def stop(est,attribute_name,threshold = 0.025,compare = lambda x,y : x < y):
 ### Function for visualizing and estimating time increase per sample
 # Benchmark Parameters
 def benchmark_time(batch_sizes, simulator):
+    """Time `simulator(n)` for each batch size `n`, print/plot results, and return the per-size timings."""
     results = []
     print("Running benchmarks...")
     for n in batch_sizes:
