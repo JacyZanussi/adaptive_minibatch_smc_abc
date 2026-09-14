@@ -14,8 +14,7 @@ each generation. This repository implements schemes that instead *adapt* the min
 (and, for stochastic simulators, the number of replicates) each generation to control the
 total variance of the posterior-selection step, trading simulation cost for accuracy more
 efficiently than a fixed schedule. See `smc_abc_schemes.py` for the available schemes
-(`constant` baseline, `fvc` variance-controlled batch size, and `fvc_rep`/`fvc_kn*` joint
-batch-size/replicate variants).
+(`constant` baseline and `fvc` variance-controlled batch size).
 
 ## Installation
 
@@ -47,7 +46,7 @@ while not est.generation >= 20:
 | Path | Purpose |
 |---|---|
 | `smc_abc.py` | Core `smc_abc_iterator` class implementing one SMC-ABC generation (sampling, parallel accept-reject, weighting, kernel update). |
-| `smc_abc_schemes.py` | Minibatch/replicate adaptation schemes (`constant`, `fvc`, `fvc_rep`, `fvc_kn`, `fvc_kn2`, `exponential`) built on top of `smc_abc.py`. |
+| `smc_abc_schemes.py` | Minibatch/replicate adaptation schemes (`constant`, `fvc`) built on top of `smc_abc.py`. |
 | `smc_abc_utils.py` | Priors, stopping-criterion helpers, and simulator benchmarking utilities. |
 | `lotka_volterra.py`, `transcriptional_dynamics.py` | Stochastic simulators for the two biological case studies. |
 | `experiments.py` | Model wrappers (`lotka_volterra_step`, `transcriptional_dynamics_step`), summary statistics, experiment-sweep runner (`simulate_experiment`), and result-processing/plotting helpers (`get_attr`, `pareto_frontier`, `time_series`, ...). |
