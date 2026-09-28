@@ -684,6 +684,7 @@ def time_series(
     quantiles=[0.25, 0.5, 0.75],
     out_path = None,
     plot_args={},
+    fig_ax=None,
 ):
     """
     Plot each attribute in attr_list as a time series over SMC ABC generations,
@@ -775,7 +776,8 @@ def time_series(
         colors = [cmap(i / max(n_keys - 1, 1)) for i in range(n_keys)]
 
         # ── Figure ────────────────────────────────────────────────────────────
-        fig, ax = plt.subplots(figsize=(5, 3.5))
+        fig, ax = plt.subplots(figsize=(5, 3.5)) if fig_ax is None else fig_ax
+        handles = []
 
         for color, k in zip(colors, keys):
             q_arr = res_attr[k]          # (3, T)
@@ -793,7 +795,7 @@ def time_series(
             else:
                 label = rf'${legend_val}$'
 
-            ax.errorbar(
+            handles.append(ax.errorbar(
                 gens, med,
                 yerr=np.stack([lower, upper], axis=0),
                 color=color,
@@ -803,7 +805,7 @@ def time_series(
                 capthick=0.9,
                 elinewidth=0.7,
                 **plot_args,
-            )
+            ))
 
         # ── Axis labels ───────────────────────────────────────────────────────
         ax.set_xlabel(r'Generation')
@@ -835,6 +837,9 @@ def time_series(
             handlelength=1.8,
         )
 
+        if fig_ax is not None:
+            return fig, ax, handles
+
         fig.tight_layout()
         if out_path is None:
             out_path = f'{handle}_{attr}.svg'
@@ -865,6 +870,7 @@ def pareto_frontier(
     auto_c_label=r'\mathrm{auto}',
     plot_args={},
     out_filename=None,
+    fig_ax=None,
 ):
     """
     Plot Pareto frontiers comparing constant minibatch SMC-ABC (reference)
@@ -1020,7 +1026,7 @@ def pareto_frontier(
     novel_sweep_colors = _colors(novel_cmap_fn, len(novel_sweep_keys))
 
     # ── Figure ────────────────────────────────────────────────────────────────
-    fig, ax = plt.subplots(figsize=(5.5, 4.0))
+    fig, ax = plt.subplots(figsize=(5.5, 4.0)) if fig_ax is None else fig_ax
 
     # shared errorbar style
     _eb_kw = dict(
@@ -1134,6 +1140,9 @@ def pareto_frontier(
                    direction='in', top=True, right=True, length=2)
     ax.spines['top'].set_visible(True)
     ax.spines['right'].set_visible(True)
+
+    if fig_ax is not None:
+        return fig, ax, ref_handles, novel_handles, auto_handles
 
     fig.tight_layout()
 

@@ -22,6 +22,9 @@ efficiently than a fixed schedule. See `smc_abc_schemes.py` for the available sc
 pip install -r requirements.txt
 ```
 
+The versions used for the paper are pinned in `paper/requirements.txt`. The paper's figure
+scripts also need a LaTeX installation (matplotlib's `text.usetex`).
+
 ## Quick start
 
 See [example_gmm.ipynb](example_gmm.ipynb) for a minimal, self-contained example (2D Gaussian
@@ -50,23 +53,25 @@ while not est.generation >= 20:
 | `smc_abc_utils.py` | Priors, stopping-criterion helpers, and simulator benchmarking utilities. |
 | `lotka_volterra.py`, `transcriptional_dynamics.py` | Stochastic simulators for the two biological case studies. |
 | `experiments.py` | Model wrappers (`lotka_volterra_step`, `transcriptional_dynamics_step`), summary statistics, experiment-sweep runner (`simulate_experiment`), and result-processing/plotting helpers (`get_attr`, `pareto_frontier`, `time_series`, ...). |
-| `experiment_hyperparameters.py`, `experiment_physical_parameters.py`, `experiment_heterogeneities.py` | SLURM-array entry points reproducing paper Figures 2, 3, and 4 respectively (see each file's docstring for the array-index-to-sweep mapping). |
-| `generate_synthetic_data.py` | One-off script that generates the reference datasets in `datasets/`. |
-| `plotting_td_lv.py` | Generates the TD/LV paper figures from pickled results in `results/` (not included; produced by the `experiment_*.py` scripts). |
-| `kilic/` | Application to the Kilic et al. gene-expression dataset (model, simulation, and plotting scripts). |
+| `experiment_hyperparameters.py`, `experiment_physical_parameters.py`, `experiment_heterogeneities.py` | SLURM-array entry points for the hyperparameter, physical-parameter and heterogeneity sweeps (see each file's docstring for the array-index-to-sweep mapping). The fits behind the paper's figures are run by `paper/campaign.py`. |
+| `generate_synthetic_data.py` | One-off script that generates the reference datasets `datasets/td.pkl` and `datasets/lv_stochastic.pkl`. |
+| `kilic/` | Application to the *E. coli* mRNA counts of Kilic et al. (2023): telegraph-model simulator, paired summaries, SMC-ABC fit (`application_kilic.py`), and exact-likelihood reference posterior (`likelihood_reference.py`). |
+| `paper/` | Reproduces the paper: every fit (`campaign.py`) and the figure scripts. |
 | `job_scripts/` | SLURM submission scripts for the HPC cluster used to run the sweeps. |
-| `datasets/` | Reference/observed datasets (synthetic + the Kilic experimental dataset). |
+| `datasets/` | Synthetic reference datasets, a Gillespie simulation at the Wang et al. (2019) slow-growth estimates (`Wang2020_SFig21_*.mat`), and the *E. coli* data (`kilic2023_fig4/`, `wang2019/`, each with a README giving its source). |
 | `*.ipynb` | Worked examples and figure-generation notebooks. |
 
-## Reproducing paper results
+## Reproducing the paper
 
-1. `python generate_synthetic_data.py` to (re)create `datasets/lv_stochastic.pkl` and `datasets/td.pkl`.
-2. Submit `job_scripts/hps_job.sh`, `job_scripts/pps_job.sh`, `job_scripts/hs_job.sh` (or run
-   `experiment_hyperparameters.py` / `experiment_physical_parameters.py` /
-   `experiment_heterogeneities.py` directly with a manual array index) to populate `results/`.
-3. Run `python plotting_td_lv.py` to regenerate the figures from `results/`.
-4. `job_scripts/kilic_job.sh` / `kilic/application_kilic.py` and
-   `kilic/plot_kilic_smc_results.py` reproduce the Kilic application figure.
+1. Run the fits: `python paper/campaign.py list <campaign>` lists them, and
+   `python paper/campaign.py run <campaign> <index|range|all>` runs them (8 worker processes per
+   fit by default). The campaigns are `main` (108 fits), `robustness` (1,610), `nsweep` (33) and
+   `ecoli` (35). The fits are independent, so a campaign can be split across machines by index.
+2. Compute the *E. coli* likelihood reference: `python kilic/likelihood_reference.py --run`.
+3. Draw the figures into `paper/results/figures/`: `python paper/collect_results.py`, then
+   `plotting_td_lv.py`, `plotting_posteriors.py`, `plotting_hdr_pairplot.py`,
+   `plotting_nsweep.py` and `plot_ecoli.py` in `paper/`.
+   The schematic figures are drawn from the pieces made in `cartoon_generation.ipynb`.
 
 ## License
 

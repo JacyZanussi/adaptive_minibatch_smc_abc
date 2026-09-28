@@ -4,14 +4,19 @@ SMC ABC implementation suited for minibatch sampling.
 Author: Jacy Zanussi
 '''
 
+import atexit
 import os
+import pickle
 import sys
+import tempfile
 import time
+import uuid
 
 import numpy as np
 
 import joblib
 from joblib import Parallel, delayed
+from joblib.externals import cloudpickle
 from functools import partial
 
 from scipy.stats import gaussian_kde
@@ -248,6 +253,11 @@ class smc_abc_iterator:
         self.last_weights = self.weights
         self.posterior_last_gen = self.posterior
         self.posterior_weights_last_gen = self.weights
+        # The previous generation's statistics and batch indices are rebuilt below. Dropping them
+        # first keeps them out of the payload sent to the workers.
+        for name in ('posterior_stats', 'batch_indices'):
+            if hasattr(self, name):
+                delattr(self, name)
         self.__parallelized_generation__()
         
 
@@ -261,7 +271,9 @@ class smc_abc_iterator:
         #Generate seeds from seed generator
         child_seeds = self._seedseq.spawn(self.accepted_per_generation)
 
-        parloop_partial = partial(
+        # Every task shares these arguments, which include the data. They are written to disk once
+        # per generation and loaded once by each worker, rather than pickled for every task batch.
+        parloop_partial = partial(_cached_parloop, _publish_payload(
             parloop,
             batch_size = self.__batch_size_round__,
             sample_size = self.sample_size,
@@ -274,7 +286,7 @@ class smc_abc_iterator:
             threshold = self.alpha_threshold,
             replace = self.sample_with_replacement,
             resample_batch_size = self.accepted_per_generation 
-        )
+        ))
 
         rind = self._main_rng.choice(self.sample_size,self.__batch_size_round__)
         dat = self.data[rind] if type(self.data) == np.ndarray else [self.data[i] for i in rind]
@@ -282,8 +294,8 @@ class smc_abc_iterator:
         self.stats_shape = s.shape
 
         thetas = np.empty((self.accepted_per_generation,self.num_params))
-        #stats = np.empty((self.accepted_per_generation,*self.stats_shape),dtype=self.dtype)
-        stats = []
+        # Allocated on the first result, with the dtype stats_func returns
+        stats = None
         dists = np.empty(self.accepted_per_generation,dtype=self.dtype)
         batch_matrix = np.empty((self.accepted_per_generation,self.__batch_size_round__),dtype=int)
         num_sims = 0
@@ -293,12 +305,13 @@ class smc_abc_iterator:
             delayed(parloop_partial)(p,seed = child_seeds[p]) for p in range(self.accepted_per_generation)
             ):
             thetas[p] = params
-            #stats[p]  = sim_stats
-            stats.append(sim_stats)
+            if stats is None:
+                first = np.asarray(sim_stats)
+                stats = np.empty((self.accepted_per_generation,*first.shape),dtype=first.dtype)
+            stats[p]  = sim_stats
             dists[p]  = dist
             batch_matrix[p] = bi
             num_sims += ns
-        stats = np.array(stats)
         self.accepted_particles = thetas
         self.accepted_stats = stats
         self.accepted_dists = dists
@@ -511,8 +524,13 @@ class smc_abc_iterator:
         if proportion is None:
             proportion = self.ess_prop
         if self.ESS <= np.ceil(self.num_particles * proportion):
-            self.posterior = self.posterior[self._main_rng.choice(range(self.num_particles),p=self.weights,size=self.num_particles,replace = True)]
-            self.weights = np.ones((self.num_particles,)) / self.num_particles 
+            source = self._main_rng.choice(self.num_particles,p=self.weights,size=self.num_particles,replace = True)
+            # Resample every per-particle array together so that each particle keeps its own statistics, distance and batch
+            for name in ('posterior', 'posterior_stats', 'posterior_dists', 'posterior_indices'):
+                value = getattr(self, name, None)
+                if value is not None:
+                    setattr(self, name, value[source])
+            self.weights = np.full(self.num_particles, 1 / self.num_particles)
             print("Resampling")
     @property
     def ESS(self):
@@ -534,7 +552,45 @@ class smc_abc_iterator:
         MAP = np.array(MAP)
         lengths = np.array(lengths)
         return MAP,intervals,lengths
-    
+
+
+
+#### Worker payload: the arguments shared by every task of a generation
+_payload_path = {'current': None}   # parent process: this generation's payload file
+_payload_cache = {}                 # worker process: {path: (func, kwargs)}, one entry at a time
+
+def _discard_payload():
+    path = _payload_path['current']
+    if path is not None:
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+        _payload_path['current'] = None
+atexit.register(_discard_payload)
+
+def _publish_payload(func, **kwargs):
+    """Write `(func, kwargs)` to a temporary file (replacing the previous generation's) and return its path."""
+    folder = os.environ.get('JOBLIB_TEMP_FOLDER') or tempfile.gettempdir()
+    os.makedirs(folder, exist_ok=True)
+    path = os.path.join(folder, f'abc_payload_{os.getpid()}_{uuid.uuid4().hex}.pkl')
+    with open(path + '.tmp', 'wb') as f:
+        cloudpickle.dump((func, kwargs), f, protocol=pickle.HIGHEST_PROTOCOL)
+    os.replace(path + '.tmp', path)
+    _discard_payload()
+    _payload_path['current'] = path
+    return path
+
+def _cached_parloop(path, p, seed):
+    """Run `func(p, seed=seed, **kwargs)` with the payload at `path`, loading it once per worker."""
+    entry = _payload_cache.get(path)
+    if entry is None:
+        _payload_cache.clear()
+        with open(path, 'rb') as f:
+            entry = pickle.load(f)
+        _payload_cache[path] = entry
+    func, kwargs = entry
+    return func(p, seed=seed, **kwargs)
 
 
 def parloop(p,batch_size,sample_size,generation,sample_func,prior,model,stats_func,dist_func,threshold,replace,resample_batch_size,seed):
