@@ -13,7 +13,14 @@ from numba import njit
 
 
 @njit
-def simulate(params, G, K, t_max, sample_times, max_steps=10_000):
+def _seed_rng(seed):
+    """Seed numba's RNG. This must happen inside an njit function: numba keeps its own RNG state,
+    which `np.random.seed` called from Python does not touch."""
+    np.random.seed(seed)
+
+
+@njit
+def simulate(params, G, K, t_max, sample_times, max_steps=10_000, seed=-1):
     """
     Stochastic gene expression simulation (Gillespie SSA).
 
@@ -31,14 +38,20 @@ def simulate(params, G, K, t_max, sample_times, max_steps=10_000):
         Times at which to record observations
     max_steps : int
         Maximum SSA steps per trajectory
+    seed : int
+        If >= 0, seed numba's RNG at the start of the call, so that the same seed and arguments
+        give the same output. Negative leaves the RNG stream running.
 
     Returns
     -------
     t_out : (K, n_samples) array
         Times of last reaction before each sample
     m_out : (K, n_samples) array
-        mRNA counts at each sample time
+        mRNA counts at each sample time. An entry is NaN when the trajectory ran out of
+        `max_steps` (or reached a zero total rate) before that sample time.
     """
+    if seed >= 0:
+        _seed_rng(seed)
 
     # --- unpack parameters ---
     n_switch = G * (G - 1)
